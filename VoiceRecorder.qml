@@ -22,6 +22,12 @@ Panel {
   readonly property bool locked: working || action.running || picker.running || phase === "loading"
   readonly property bool canRecord: !locked || (capturing && !action.running)
   readonly property bool canRetry: phase === "error" && !!snapshot.original && !snapshot.cleaned
+  property var liveState: ({})
+  property bool liveCommandFailed: false
+  readonly property string livePhase: liveState.phase || "off"
+  readonly property bool liveActive: ["starting", "on", "stopping"].includes(livePhase)
+  readonly property bool liveCanToggle: !liveCommand.running && livePhase !== "stopping"
+  readonly property string liveProblem: liveCommandFailed ? "backend" : (liveState.error || "")
   property bool settingsPage: false
   property string localError: ""
   property double now: Date.now() / 1000
@@ -48,6 +54,23 @@ Panel {
     localError = ""
     action.command = ["/usr/bin/python3", "-B", script("recorder.py")].concat(args)
     action.running = true
+  }
+  function readLive(raw) {
+    try {
+      const state = JSON.parse(raw)
+      if (!["off", "starting", "on", "stopping", "error"].includes(state.phase)) return false
+      liveState = state
+      liveCommandFailed = false
+      return true
+    } catch (e) { return false }
+  }
+  function liveRequest(verb) {
+    if (liveCommand.running) return
+    liveCommand.command = ["/usr/bin/python3", "-B", script("live.py"), verb]
+    liveCommand.running = true
+  }
+  function toggleLive() {
+    if (liveCanToggle) liveRequest(liveActive ? "stop" : "start")
   }
   function recordAction() {
     if (!canRecord) return
@@ -93,6 +116,7 @@ Panel {
     if (opened) {
       now = Date.now() / 1000
       run(["status"])
+      liveRequest("status")
     } else {
       stopSound()
     }
@@ -116,6 +140,29 @@ Panel {
     printErrors: false
     onLoaded: root.update(text())
     onFileChanged: reload()
+  }
+  Process {
+    id: liveCommand
+    stdout: StdioCollector { id: liveOutput; waitForEnd: true }
+    onExited: {
+      if (!root.readLive(liveOutput.text)) root.liveCommandFailed = true
+      else liveFile.reload()
+    }
+  }
+  FileView {
+    id: liveFile
+    path: Quickshell.env("XDG_RUNTIME_DIR") + "/omarchy-voice-recorder/live.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.readLive(text())
+    onFileChanged: reload()
+  }
+  Timer {
+    // Reconcile a stale on-state if the streaming worker exits unexpectedly.
+    interval: 5000
+    repeat: true
+    running: root.liveActive
+    onTriggered: root.liveRequest("status")
   }
   Timer {
     interval: 250
@@ -175,10 +222,24 @@ Panel {
       onStopped: mic.textRotation = 0
     }
     text: root.capturing ? "󰑊" : root.phase === "processing" ? "󰑐" : "󰍬"
-    active: root.working || root.phase === "error"
+    active: root.working || root.phase === "error" || root.liveActive
     activeColor: root.capturing || root.phase === "error" ? Commons.Color.urgent : Commons.Color.accent
-    tooltipText: root.capturing ? strings.t("tip.stop").arg(root.timecode)
+    readonly property string fileHint: root.capturing ? strings.t("tip.stop").arg(root.timecode)
       : root.phase === "processing" ? strings.t("state.processing") : strings.t("tip.start")
+    tooltipText: root.liveActive ? strings.t("live.tooltip").arg(strings.t("live." + root.livePhase)).arg(fileHint) : fileHint
+    Rectangle {
+      visible: root.liveActive
+      width: Math.max(Style.space(6), Math.round(mic.visualIconSize * 0.45))
+      height: width
+      radius: width / 2
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.rightMargin: Math.max(0, (mic.slotSize - mic.canvasSize) / 2)
+      anchors.topMargin: Math.max(0, (mic.height - mic.canvasSize) / 2)
+      color: Commons.Color.accent
+      border.width: 1
+      border.color: Commons.Color.bar.background
+    }
     pressFeedbackButtons: Qt.LeftButton | Qt.RightButton
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.recordAction()

@@ -55,7 +55,7 @@ class RecorderTests(unittest.TestCase):
         self.runtime.mkdir()
         models = self.root / "models"
         models.mkdir()
-        self.weights = models / "dpdfnet2_48khz_hr.onnx"
+        self.weights = models / "dpdfnet8_48khz_hr.onnx"
         self.weights.write_bytes(b"fixture")
         self.env = dict(os.environ, HOME=str(self.root), PATH=str(binary),
                         XDG_CONFIG_HOME=str(self.root / "config"), XDG_DATA_HOME=str(self.root / "data"),
@@ -95,7 +95,7 @@ class RecorderTests(unittest.TestCase):
         self.assertGreater(recording["startedAt"], 0)
         self.assertFalse(recording["original"])
         self.assertEqual(self.call("set-strength", "24")["strength"], 6)
-        self.assertEqual(self.call("set-model", "baseline")["model"], "dpdfnet2_48khz_hr")
+        self.assertEqual(self.call("set-model", "baseline")["model"], "dpdfnet8_48khz_hr")
         self.call("stop")
         self.call("stop")
         ready = self.wait_for("ready")
@@ -174,6 +174,7 @@ class RecorderTests(unittest.TestCase):
 
     def test_model_registry_and_selection_validation(self):
         state = self.call("status")
+        self.assertEqual((state["model"], state["strength"]), ("dpdfnet8_48khz_hr", 12))
         self.assertEqual([row["rate"] for row in state["models"]], [48000]*2 + [16000]*4 + [8000]*2)
         self.assertEqual([row["id"] for row in state["models"] if row["installed"]], [state["model"]])
         self.assertEqual(self.call("set-model", "bogus/../model")["error"], "model")
@@ -265,7 +266,7 @@ class RecorderTests(unittest.TestCase):
         Path(ready["cleaned"]).unlink()
 
         for action, missing, available in [("set-strength", "12", "6"),
-                                            ("set-model", "baseline", "dpdfnet2_48khz_hr")]:
+                                            ("set-model", "baseline", "dpdfnet8_48khz_hr")]:
             with self.subTest(action=action):
                 absent = self.call(action, missing)
                 self.assertEqual((absent["phase"], absent["error"]), ("error", "interrupted"))

@@ -6,7 +6,7 @@ Record from the default microphone, clean up background noise locally and listen
 
 ## Record and compare
 
-1. Open the gear menu to choose a save folder, model and noise suppression limit. Start with the default 48 kHz DPDFNet-2 and 12 dB. Choose 6 dB to retain more of the room or 24 dB for stronger suppression.
+1. Open the gear menu to choose a save folder, model and noise suppression limit. The recording default is DPDFNet-8 HR at 48 kHz and 12 dB. Choose 6 dB to retain more of the room or 24 dB for stronger suppression.
 2. Start a recording. The microphone indicator shows when recording is active. Stop when you finish speaking. DPDFNet then processes the take on the CPU.
 3. Play the original and cleaned versions in the panel. To compare another setup on the same phrase, select a different model or strength and reprocess the latest take. Each new combination produces a separate result from the original WAV. Select a previously rendered combination to play it again immediately.
 
@@ -20,9 +20,15 @@ Record from the default microphone, clean up background noise locally and listen
 
 The default destination is `DPDFNet` under the XDG Music directory, usually `~/Music/DPDFNet`. Each timestamped take folder contains the 48 kHz mono `original.wav` and the initial `cleaned.wav`. Additional versions are stored under `variants/`, for example `variants/dpdfnet8-24dB.wav`. This also works with takes recorded in version 0.1. Changing the destination applies to future takes. Settings are saved in `${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-voice-recorder/settings.json`.
 
+## Live microphone for calls and streams
+
+Open the recorder panel and enable **Clean microphone**. In the calling app, browser or OBS, choose **DPDFNet Clean Microphone** as the audio input. The plugin processes your system microphone locally and feeds the result directly to that input. Closing the panel keeps the audio flowing. Disable the switch when you finish.
+
+At startup the plugin times the selected model on a short synthetic signal. If it needs more time than the incoming audio allows, the plugin tries a lighter model at the same sample rate. The panel shows which model is actually running. File recordings use the model selected in settings. To apply new settings to an active call, switch Clean microphone off and on.
+
 ## Install
 
-Tested on Omarchy 4.5 with Quickshell, PipeWire, system Python 3, GTK 4.10+ and PyGObject. The folder picker uses GTK, and playback uses `pw-play`. To install a missing system dependency on Omarchy, use `omarchy pkg add` with the relevant package name (`python`, `python-gobject`, `gtk4`, `pipewire-audio`, `xdg-utils`, `xdg-user-dirs` or `uv`).
+Tested on Omarchy 4.5 with Quickshell, PipeWire, system Python 3, GTK 4.10+ and PyGObject. The folder picker uses GTK. The virtual microphone uses `pw-cat`, `pw-dump` and `pactl` with PipeWire’s PulseAudio compatibility service. To install a missing system dependency on Omarchy, use `omarchy pkg add` with the relevant package name (`python`, `python-gobject`, `gtk4`, `pipewire`, `pipewire-audio`, `pipewire-pulse`, `libpulse`, `xdg-utils`, `xdg-user-dirs` or `uv`).
 
 From a checkout of this repository, install the engine once and link the widget into your shell.
 
@@ -43,11 +49,13 @@ To run the controller tests from a checkout, use `python3 -m unittest discover -
 
 ## Remove
 
-Finish the active take, then run `omarchy plugin remove re_pick.voice-recorder`. Your takes stay in the selected recording folder. Omarchy removes the widget independently of the Python environment and model, which may also serve other audio tools.
+Finish the active take and switch off Clean microphone, then run `omarchy plugin remove re_pick.voice-recorder`. Your takes stay in the selected recording folder. Omarchy removes the widget independently of the Python environment and model, which may also serve other audio tools.
 
 ## По-русски
 
-Нажмите микрофон рядом с мировыми часами, чтобы открыть панель. Правая кнопка запускает запись, повторное нажатие останавливает её и запускает очистку. В настройках под шестерёнкой выберите папку, модель и силу шумоподавления. Для микрофона подойдёт группа 48 кГц, для сравнения речевых моделей — 16 кГц, для узкополосного телефонного звука — 8 кГц. По умолчанию выбраны DPDFNet-2 HR и 12 дБ.
+Нажмите микрофон рядом с мировыми часами, чтобы открыть панель. Правая кнопка запускает запись, повторное нажатие останавливает её и запускает очистку. В настройках под шестерёнкой выберите папку, модель и силу шумоподавления. По умолчанию для записи выбраны DPDFNet-8 HR, 48 кГц и 12 дБ.
+
+Для звонка или стрима включите **«Чистый микрофон»** и выберите **DPDFNet Clean Microphone** в списке микрофонов нужного приложения. Панель можно свернуть. Если процессор не успевает обрабатывать поток выбранной моделью, плагин попробует более лёгкую модель той же частоты и покажет её название. Чтобы применить новые настройки к текущему потоку, выключите и снова включите чистый микрофон.
 
 Чтобы сравнить модели на одной фразе, измените настройки и запустите повторную обработку последнего дубля. Плагин возьмёт `original.wav` и сохранит результат отдельным WAV в подпапке `variants/`. Первый `cleaned.wav` останется рядом с исходником. Выберите уже обработанную комбинацию модели и силы, чтобы сразу её прослушать. Если у вас была версия с одной моделью, выполните `./scripts/install-engine` из каталога плагина, чтобы догрузить остальные.
 

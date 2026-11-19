@@ -18,6 +18,11 @@ PanelKeyCatcher {
   readonly property var models: stateData.models || []
   readonly property var chosen: models.find(item => item.id === stateData.model) || null
   readonly property var used: models.find(item => item.id === stateData.cleanedModel) || null
+  readonly property var liveModel: models.find(item => item.id === recorder.liveState.model) || null
+  readonly property string requestedLiveModel: recorder.liveState.requestedModel || recorder.liveState.model || ""
+  readonly property bool liveFallback: recorder.livePhase === "on" && !!liveModel && requestedLiveModel !== liveModel.id
+  readonly property bool liveChanged: recorder.liveActive && !!chosen && !!liveModel
+    && (chosen.id !== requestedLiveModel || stateData.strength !== recorder.liveState.strength)
   readonly property bool canApply: !!stateData.original && !!stateData.cleaned && stateData.matched === false
   function rateText(rate) { return words.t("model.rate").arg(rate / 1000) }
   function variantText(model, strength) {
@@ -57,7 +62,7 @@ PanelKeyCatcher {
   function move(step) {
     const available = (settings
       ? [settingsButton, fullRate, wideRate, phoneRate, baseModelButton, net2, net4, net8, mild, normal, strong, folderButton]
-      : [mainButton, dry, wet, applyButton, retryButton, filesButton, settingsButton])
+      : [mainButton, dry, wet, applyButton, retryButton, filesButton, liveButton, settingsButton])
       .filter(item => item.visible && item.enabled)
     if (!available.length) return
     const at = available.indexOf(cursor)
@@ -309,6 +314,77 @@ PanelKeyCatcher {
             iconText: "󰑐"
             text: view.words.t("record.retry")
             onClicked: view.recorder.run(["retry"])
+          }
+          PanelSeparator { foreground: view.ink }
+          Column {
+            width: parent.width
+            spacing: Style.space(5)
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(8)
+              Column {
+                Layout.fillWidth: true
+                spacing: Style.space(2)
+                Label { width: parent.width; text: view.words.t("live.title"); font.bold: true }
+                Label {
+                  width: parent.width
+                  text: view.words.t("live." + view.recorder.livePhase)
+                  color: view.recorder.liveActive ? Commons.Color.accent : view.muted
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+              Action {
+                id: liveButton
+                objectName: "liveToggle"
+                enabled: view.recorder.liveCanToggle
+                selected: view.recorder.livePhase === "on"
+                bordered: true
+                iconText: view.recorder.liveActive ? "󰓛" : "󰐊"
+                text: view.words.t(view.recorder.liveActive ? "live.stop" : "live.start")
+                Accessible.name: view.words.t("live.action").arg(text)
+                Accessible.description: view.words.t("live." + view.recorder.livePhase)
+                onClicked: view.recorder.toggleLive()
+              }
+            }
+            Label {
+              width: parent.width
+              visible: view.recorder.liveActive && !!view.liveModel
+              wrapMode: Text.WordWrap
+              text: view.variantText(view.liveModel, view.recorder.liveState.strength)
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+            }
+            Label {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: view.words.t(view.recorder.liveActive ? "live.routingOn" : "live.routingOff")
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+            }
+            Label {
+              width: parent.width
+              visible: view.liveFallback
+              wrapMode: Text.WordWrap
+              text: view.words.t("live.fallback")
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+            }
+            Label {
+              width: parent.width
+              visible: view.liveChanged
+              wrapMode: Text.WordWrap
+              text: view.words.t("live.restart")
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+            }
+            Label {
+              width: parent.width
+              visible: view.recorder.liveProblem !== ""
+              wrapMode: Text.WordWrap
+              text: view.words.t("live.error." + view.recorder.liveProblem, view.words.t("live.error.backend"))
+              color: Commons.Color.urgent
+              font.pixelSize: Style.font.bodySmall
+            }
           }
         }
 

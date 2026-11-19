@@ -24,7 +24,8 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / APP / "settings.json"
 STATE = RUNTIME / "state.json"
 STOP = RUNTIME / "stop"
-DEFAULT_MODEL = "dpdfnet2_48khz_hr"
+DEFAULT_MODEL = "dpdfnet8_48khz_hr"
+LEGACY_MODEL = "dpdfnet2_48khz_hr"
 MODELS = {
     "dpdfnet2_48khz_hr": ("DPDFNet-2", 48000),
     "dpdfnet8_48khz_hr": ("DPDFNet-8", 48000),
@@ -136,7 +137,7 @@ def inspect_take(state):
         except OSError:
             provenance = {}
         # Older releases supported one model and did not save the attenuation limit.
-        rendered_model = provenance.get("model", "" if metadata.exists() else DEFAULT_MODEL)
+        rendered_model = provenance.get("model", "" if metadata.exists() else LEGACY_MODEL)
         rendered_strength = provenance.get("strength", 0)
         if not isinstance(rendered_model, str) or rendered_model not in MODELS:
             rendered_model = ""
