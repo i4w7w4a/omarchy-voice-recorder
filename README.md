@@ -1,38 +1,18 @@
-# Omarchy Voice Recorder
+# 🎙️ Omarchy Voice Recorder
 
-Record from the default microphone, clean up background noise locally and listen to both versions from the Omarchy bar. Click the microphone beside World Clocks to open the controls. Right-click it to start recording, then right-click again to stop and clean the take. You can close the panel while you speak.
+**Give OBS, Discord and browser calls a clean microphone while you speak.** This Omarchy bar widget uses DPDFNet to reduce background noise locally and sends your voice to a virtual input called **DPDFNet Clean Microphone**.
 
-![Recorder panel showing a saved take and both playback controls](preview.png)
+You can also record a voice-over straight from the bar. Keep the original WAV, listen to it alongside the cleaned take, and try another model on the same phrase. Once the engine and models are installed, recording and cleanup work offline.
 
-## Record and compare
+![Animated walkthrough of recording a take and enabling the clean microphone for a stream](assets/demo.gif)
 
-1. Open the gear menu to choose a save folder, model and noise suppression limit. The recording default is DPDFNet-8 HR at 48 kHz and 12 dB. Choose 6 dB to retain more of the room or 24 dB for stronger suppression.
-2. Start a recording. The microphone indicator shows when recording is active. Stop when you finish speaking. DPDFNet then processes the take on the CPU.
-3. Play the original and cleaned versions in the panel. To compare another setup on the same phrase, select a different model or strength and reprocess the latest take. Each new combination produces a separate result from the original WAV. Select a previously rendered combination to play it again immediately.
+[Quick start](#quick-start) · [Live microphone](#live-microphone) · [Record and compare](#record-and-compare) · [Performance](#performance) · [По-русски](#russian)
 
-<img src="settings.png" alt="Recorder settings with language, model, noise reduction and live processing device controls" width="355">
+<a id="quick-start"></a>
 
-| Model group | Available models | When to try it |
-| --- | --- | --- |
-| 48 kHz | DPDFNet-2 HR, DPDFNet-8 HR | Preserve the widest frequency range of a microphone recording. |
-| 16 kHz | Baseline, DPDFNet-2, DPDFNet-4, DPDFNet-8 | Compare speech-focused models, including the lightweight baseline. |
-| 8 kHz | DPDFNet-2, DPDFNet-8 | Try narrowband, telephone-style speech. |
+## ⚡ Quick start
 
-The default destination is `DPDFNet` under the XDG Music directory, usually `~/Music/DPDFNet`. Each timestamped take folder contains the 48 kHz mono `original.wav` and the initial `cleaned.wav`. Additional versions are stored under `variants/`, for example `variants/dpdfnet8-24dB.wav`. This also works with takes recorded in version 0.1. Changing the destination applies to future takes. Settings are saved in `${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-voice-recorder/settings.json`.
-
-## Live microphone for calls and streams
-
-Open the recorder panel and enable **Clean microphone**. In the calling app, browser or OBS, choose **DPDFNet Clean Microphone** as the audio input. The plugin processes your system microphone locally and feeds the result directly to that input. Closing the panel keeps the audio flowing. Disable the switch when you finish.
-
-In settings, choose the device for **live processing**. **Auto** tries the selected model on NVIDIA when the optional CUDA engine is installed, then tries the CPU. **NVIDIA GPU** requires CUDA and keeps your chosen model. **CPU** uses the processor and can choose a lighter model at the same sample rate. A startup timing check determines whether the engine can sustain the stream. The panel shows the active model and device. Switch the clean microphone off and on to apply a new choice. Saved recordings use the selected model and run on the CPU after capture.
-
-The language setting offers **System**, **English** and **Русский**. The change applies immediately across the plugin’s panels and bar tooltips.
-
-## Install
-
-Tested on Omarchy 4.5 with Quickshell, PipeWire, system Python 3, GTK 4.10+ and PyGObject. The folder picker uses GTK. The virtual microphone uses `pw-cat`, `pw-dump` and `pactl` with PipeWire’s PulseAudio compatibility service. To install a missing system dependency on Omarchy, use `omarchy pkg add` with the relevant package name (`python`, `python-gobject`, `gtk4`, `pipewire`, `pipewire-audio`, `pipewire-pulse`, `libpulse`, `xdg-utils`, `xdg-user-dirs` or `uv`).
-
-Install the widget from GitHub, then run the per-user engine installer:
+Install the plugin and its local engine on your Omarchy desktop.
 
 ```sh
 omarchy plugin add https://github.com/i4w7w4a/omarchy-voice-recorder.git
@@ -40,34 +20,109 @@ omarchy plugin add https://github.com/i4w7w4a/omarchy-voice-recorder.git
 omarchy plugin enable re_pick.voice-recorder --after omarchy.elsewhen
 ```
 
-If World Clocks is absent, use `omarchy plugin enable re_pick.voice-recorder --section centerEnd`.
+The installer uses `uv`. If it is missing, run `omarchy pkg add uv` first. If your bar has no World Clocks widget, use `omarchy plugin enable re_pick.voice-recorder --section centerEnd` for the last command.
 
-For NVIDIA live acceleration, install a working NVIDIA driver and run the optional GPU setup:
+Click the **microphone** beside World Clocks. Choose **Enable** under **Clean microphone** to use it in a stream, or **Start recording** to save a take. A **right-click** on the bar microphone starts a recording directly. Right-click again to stop and clean it.
+
+<a id="live-microphone"></a>
+
+## 🔴 Live microphone
+
+Leave your physical microphone selected as the system input. Enable **Clean microphone** in the panel, then choose **DPDFNet Clean Microphone** in the app that should receive the audio.
+
+| App | Where to select it |
+| --- | --- |
+| **OBS Studio** | **Settings → Audio → Mic/Auxiliary Audio** |
+| **Discord** | **User Settings → Voice & Video → Input Device** |
+| **Browser call** | The meeting’s **Microphone** or **Audio input** menu. Allow microphone access when the browser prompts. |
+
+The stream keeps running when you close the panel. The panel shows the active model and processing device. Switch **Clean microphone** off and on to apply new settings, and disable it when you finish the call.
+
+<a id="record-and-compare"></a>
+
+## 🎧 Record and compare
+
+1. Click **Start recording**, speak, then click **Stop and clean**. The plugin saves a mono 48 kHz WAV and cleans the take on the CPU.
+2. Under **Latest recording**, listen to **Original** and **Cleaned**. To try another sound, open the gear menu, choose a model or noise reduction level, then return and click **Apply to this recording**.
+3. Each new combination renders from the same original. Pick a previously rendered combination for immediate playback. The folder button opens the take and all its versions in your file manager.
+
+The default is **DPDFNet-8 at 48 kHz** with **Standard (12 dB)** noise reduction. Try **Gentle (6 dB)** to keep more room sound, or **Strong (24 dB)** for louder backgrounds. Stronger suppression can soften quiet speech.
+
+| Model group | Choices in settings | Audio bandwidth |
+| --- | --- | --- |
+| **48 kHz** | DPDFNet-2, DPDFNet-8 | Fullband microphone audio. These are the upstream HR models. |
+| **16 kHz** | Baseline, DPDFNet-2, DPDFNet-4, DPDFNet-8 | Wideband speech, including the lightweight Baseline model. |
+| **8 kHz** | DPDFNet-2, DPDFNet-8 | Narrowband, telephone-style speech. |
+
+Use **Settings → Recordings folder → Choose folder** to set the destination for future takes. The default is `DPDFNet` in your XDG Music directory, usually `~/Music/DPDFNet`. Each timestamped folder contains `original.wav` and the initial `cleaned.wav`. Later versions appear under `variants/`, for example `variants/dpdfnet8-24dB.wav`. Earlier takes keep their files when you change settings.
+
+<details>
+<summary><strong>📷 See the recorder, live input and settings panels</strong></summary>
+
+| Recorder and playback | Live microphone |
+| :---: | :---: |
+| <img src="assets/recorder.png" alt="Recorder panel with the Original and Cleaned playback controls" width="300"> | <img src="preview.png" alt="Clean microphone streaming DPDFNet-8 at 48 kHz on NVIDIA" width="300"> |
+
+| Fullband models · Auto | Wideband models · NVIDIA GPU |
+| :---: | :---: |
+| <img src="settings.png" alt="48 kHz model choices and automatic live processing in settings" width="300"> | <img src="assets/settings-models.png" alt="Four 16 kHz model choices and NVIDIA GPU selected for live processing" width="300"> |
+
+</details>
+
+<a id="performance"></a>
+
+## ⚙️ CPU, NVIDIA and real-time performance
+
+The standard install runs on the CPU. To enable NVIDIA acceleration for the **live microphone**, install a working NVIDIA driver and run the GPU setup.
 
 ```sh
 "$HOME/.config/omarchy/plugins/re_pick.voice-recorder/scripts/install-gpu"
 ```
 
-GPU setup downloads ONNX Runtime and the NVIDIA CUDA libraries into a separate per-user environment. Both engines use the same model cache. The tested GPU environment takes about 2.8 GiB of disk space, plus the package manager’s download cache. Driver installation is managed separately by your distribution.
+Open **Settings → Clean microphone processing** to choose a device.
 
-On a GeForce GTX 1080 Ti with the NVIDIA 580.178.04 driver, DPDFNet-8 HR at 48 kHz took **7.53 ms per 10 ms hop** at the median and **8.69 ms** at the 95th percentile over 1,000 warmed-up hops. This measures processing time on an active desktop. PipeWire and the calling app add buffering. Other GPUs and workloads should use the startup check on their own hardware.
+| Device setting | What happens when you enable the live microphone |
+| --- | --- |
+| **Auto** | Tries the chosen model on NVIDIA if the GPU engine is installed, then tries the CPU. |
+| **CPU** | Measures the chosen model and can switch to a lighter model at the same sample rate to keep up with speech. |
+| **NVIDIA GPU** | Uses the chosen model on CUDA. If it misses the real-time budget, select a lighter model or switch to Auto. |
 
-The engine installer uses `uv` to set up a private Python 3.13 environment under `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv`, install `dpdfnet==0.6.0` from PyPI and download all eight official ONNX models. The standard model location is `${XDG_CACHE_HOME:-$HOME/.cache}/dpdfnet/models`. Run `./scripts/install-engine` again to upgrade a single-model installation or resume an interrupted download. It reuses completed files and checks that each model opens. An existing DPDFNet executable on the shell’s `PATH` with the selected model in its cache is also supported. Recording, enhancement and playback work offline after setup. [DPDFNet](https://github.com/ceva-ip/DPDFNet) · [Pretrained models](https://huggingface.co/Ceva-IP/DPDFNet)
+**Measured on one desktop.** Each row times 1,000 warmed-up 10 ms blocks of synthetic 48 kHz audio. A live model has 10 ms to process each block.
 
-To run the controller tests from a checkout, use `python3 -m unittest discover -s tests -v`. The tests use a synthetic audio source and temporary directories.
+| Processing device | Model | Median per block | 95th percentile |
+| --- | --- | ---: | ---: |
+| GeForce GTX 1080 Ti · NVIDIA 580.178.04 | DPDFNet-8 HR | 7.53 ms | 8.69 ms |
+| Intel Xeon E5-2660 v2 | DPDFNet-8 HR | 14.35 ms | 15.54 ms |
+| Intel Xeon E5-2660 v2 | DPDFNet-2 HR | 5.21 ms | 5.88 ms |
 
-## Remove
+These timings cover model processing. End-to-end latency also includes microphone capture, the model’s analysis window, PipeWire buffering and the receiving app. The plugin checks live performance on your hardware at startup.
 
-Finish the active take and switch off Clean microphone, then run `omarchy plugin remove re_pick.voice-recorder`. Your takes stay in the selected recording folder. Omarchy removes the widget independently of the Python environment and model, which may also serve other audio tools.
+<details>
+<summary><strong>System requirements, disk usage and engine paths</strong></summary>
+
+Tested on Omarchy 4.5 with Quickshell and PipeWire. The recorder uses system Python 3. The folder chooser uses GTK 4.10+ and PyGObject. Live audio uses `pw-cat`, `pw-dump` and `pactl` with PipeWire’s PulseAudio compatibility service. On Omarchy, install missing packages with `omarchy pkg add`. Package names include `python`, `python-gobject`, `gtk4`, `pipewire`, `pipewire-audio`, `pipewire-pulse`, `libpulse`, `xdg-utils`, `xdg-user-dirs` and `uv`.
+
+- **CPU engine.** `scripts/install-engine` uses `uv` to create a per-user Python 3.13 environment in `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv`, install `dpdfnet==0.6.0` and fetch all eight official ONNX models. You can rerun it after an interrupted download or to upgrade an older single-model install. It reuses complete models and verifies each one.
+- **GPU engine.** `scripts/install-gpu` creates a separate Python 3.12 environment under `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/gpu-venv` for ONNX Runtime GPU and CUDA 12 libraries. The tested GPU environment uses about **2.8 GiB**, plus the package download cache.
+- **Shared model cache.** Both engines use `${XDG_CACHE_HOME:-$HOME/.cache}/dpdfnet/models` by default. The CPU recorder can also use an existing `dpdfnet` on the shell’s `PATH` with the selected model cached.
+- **Preferences.** Settings live at `${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-voice-recorder/settings.json`. Set **Interface language** to **System**, **English** or **Русский** for an immediate update.
+
+</details>
+
+<a id="russian"></a>
 
 ## По-русски
 
-Нажмите микрофон рядом с мировыми часами, чтобы открыть панель. Правая кнопка запускает запись, повторное нажатие останавливает её и запускает очистку. В настройках под шестерёнкой выберите папку, модель и силу шумоподавления. По умолчанию для записи выбраны DPDFNet-8 HR, 48 кГц и 12 дБ.
+**Для стрима или звонка.** После установки нажмите значок микрофона рядом с мировыми часами. Включите **«Чистый микрофон»**, затем выберите **DPDFNet Clean Microphone** в OBS, Discord или настройках звука браузерного звонка. Панель можно закрыть. Для работы на NVIDIA установите GPU-движок командой выше и выберите **NVIDIA GPU** в настройках. Чтобы применить новые параметры к текущему потоку, выключите и снова включите чистый микрофон.
 
-Для звонка или стрима включите **«Чистый микрофон»** и выберите **DPDFNet Clean Microphone** в списке микрофонов нужного приложения. Для работы на видеокарте выполните `scripts/install-gpu` и выберите **NVIDIA GPU** в настройках. Панель покажет активную модель и устройство. При смене устройства выключите и снова включите чистый микрофон. Язык интерфейса можно переключить между системным, русским и английским прямо в настройках.
+**Для записи.** Нажмите значок правой кнопкой, произнесите фразу и нажмите ещё раз, чтобы закончить запись и запустить очистку. В панели можно прослушать исходник и очищенный голос. В настройках под шестерёнкой выбираются папка, модель и сила подавления. Чтобы сравнить две настройки на одной фразе, выберите вторую комбинацию и примените её к этой записи. Новый WAV появится в `variants/` рядом с исходными файлами дубля.
 
-Чтобы сравнить модели на одной фразе, измените настройки и запустите повторную обработку последнего дубля. Плагин возьмёт `original.wav` и сохранит результат отдельным WAV в подпапке `variants/`. Первый `cleaned.wav` останется рядом с исходником. Выберите уже обработанную комбинацию модели и силы, чтобы сразу её прослушать. Если у вас была версия с одной моделью, выполните `./scripts/install-engine` из каталога плагина, чтобы догрузить остальные.
+## Uninstall
 
-## License
+Finish the active recording and disable **Clean microphone**, then run `omarchy plugin remove re_pick.voice-recorder`. Your takes stay in the folder you chose. The Python environments and model cache are separate from the widget and may also serve other audio tools.
 
-The widget and helper scripts use the MIT license. DPDFNet and its models are downloaded separately and distributed by their authors under Apache 2.0. [Widget license](LICENSE) · [DPDFNet license](https://github.com/ceva-ip/DPDFNet/blob/main/LICENSE)
+## Development and license
+
+From a checkout, run `python3 -m unittest discover -s tests -v`. The controller tests use synthetic audio and temporary directories.
+
+The widget and its helper scripts use the MIT license. The engine installer downloads Ceva’s DPDFNet and pretrained models separately, under Apache 2.0. [Widget license](LICENSE) · [DPDFNet source and license](https://github.com/ceva-ip/DPDFNet) · [Pretrained models](https://huggingface.co/Ceva-IP/DPDFNet)
