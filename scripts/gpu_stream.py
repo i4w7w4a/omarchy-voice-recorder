@@ -10,6 +10,8 @@ import sys
 import tempfile
 import time
 
+from model_weights import ModelIntegrityError, model_dir, verified_model_path
+
 
 def prepare_libraries():
     """Let the CUDA provider and cuDNN dlopen the CUDA wheels in this venv."""
@@ -87,14 +89,15 @@ class CudaStream:
         provider = ("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC",
                                               "do_copy_in_default_stream": "1",
                                               "enable_cuda_graph": "1" if capture else "0"})
-        session = ort.InferenceSession(str(path), sess_options=options,
-                                       providers=[provider, "CPUExecutionProvider"])
-        session.disable_fallback()
-        if session.get_providers()[0] != "CUDAExecutionProvider":
-            raise CudaUnavailable("CUDA provider could not initialize")
-        # Upstream owns all STFT, buffering and overlap-add behavior. Its 0.6.0
-        # frontend hardcodes a CPU session, so replace only the inference backend.
-        self.frontend = StreamEnhancer(model=model, onnx_path=path)
+        with verified_model_path(model, path) as verified:
+            session = ort.InferenceSession(str(verified), sess_options=options,
+                                           providers=[provider, "CPUExecutionProvider"])
+            session.disable_fallback()
+            if session.get_providers()[0] != "CUDAExecutionProvider":
+                raise CudaUnavailable("CUDA provider could not initialize")
+            # Upstream owns STFT, buffering and overlap-add. Its 0.6.0 frontend
+            # hardcodes a CPU session, so replace only the inference backend.
+            self.frontend = StreamEnhancer(model=model, onnx_path=verified)
         self.frames = DeviceFrames(session, self.frontend._runtime.init_state, capture)
         self.frontend._runtime = replace(self.frontend._runtime, session=self.frames)
 
@@ -112,7 +115,7 @@ class CudaStream:
 def verify(model, seconds):
     import numpy as np
     from dpdfnet import StreamEnhancer
-    from recorder import MODELS, model_dir
+    from recorder import MODELS
 
     path = model_dir() / (model + ".onnx")
     rate = MODELS[model][1]
@@ -140,7 +143,8 @@ def verify(model, seconds):
     for block in blocks[:10]:
         gpu.process(block)
     gpu.reset()
-    cpu = StreamEnhancer(model=model, onnx_path=path)
+    with verified_model_path(model, path) as verified:
+        cpu = StreamEnhancer(model=model, onnx_path=verified)
     reference = np.concatenate([cpu.process(block) for block in blocks[:80]])
     timings, outputs = [], []
     for i, block in enumerate(blocks):
@@ -163,9 +167,14 @@ def verify(model, seconds):
 
 
 if __name__ == "__main__":
+    from recorder import MODELS
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="dpdfnet8_48khz_hr")
+    parser.add_argument("--model", choices=MODELS, default="dpdfnet8_48khz_hr")
     parser.add_argument("--seconds", type=int, default=3)
     args = parser.parse_args()
     prepare_libraries()
-    verify(args.model, args.seconds)
+    try:
+        verify(args.model, args.seconds)
+    except ModelIntegrityError as exc:
+        sys.exit(f"Could not verify DPDFNet weights. {exc}. Run scripts/install-engine to refresh them.")

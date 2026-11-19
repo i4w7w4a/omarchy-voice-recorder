@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "re_pick.voice-recorder",
   "name": "Omarchy Voice Recorder",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": "i4w7w4a",
   "description": "Record and compare denoised speech, or send a local CPU- or NVIDIA-accelerated microphone to calls and streams.",
   "license": "MIT",

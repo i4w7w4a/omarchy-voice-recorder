@@ -1,5 +1,6 @@
 """Exercise the CLI without requiring a microphone, model download or audio server."""
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,8 @@ import time
 import unittest
 import wave
 
-CLI = Path(__file__).resolve().parents[1] / "scripts/recorder.py"
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+PLUGIN_ID = "re_pick.voice-recorder"
 
 # A synthetic 48 kHz source with the same SIGINT/exit contract as pw-record.
 FAKE_RECORD = """
@@ -22,10 +24,17 @@ def stop(*_):
     global running
     running = False
 signal.signal(signal.SIGINT, stop)
-pathlib.Path(os.environ["XDG_RUNTIME_DIR"], "controller-pid").write_text(str(os.getppid()))
+runtime = pathlib.Path(os.environ["XDG_RUNTIME_DIR"])
+(runtime / "controller-pid").write_text(str(os.getppid()))
+slow_input = runtime / "slow-input"
 frames = b"".join(struct.pack("<h", int(3000 * math.sin(i * math.pi / 24))) for i in range(960))
 with wave.open(sys.argv[-1], "wb") as output:
     output.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+    if slow_input.exists():
+        output.writeframes(frames[:32])
+    (runtime / "capture-pid").write_text(str(os.getpid()))
+    while running and slow_input.exists():
+        time.sleep(0.02)
     while running:
         output.writeframes(frames)
         time.sleep(0.02)
@@ -50,6 +59,14 @@ class RecorderTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
+        scripts = self.root / "checkout/scripts"
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        self.cli = scripts / "recorder.py"
+        manifest = scripts / "model_weights.json"
+        pins = json.loads(manifest.read_text())
+        for entry in pins["models"].values():
+            entry.update(size=len(b"fixture"), sha256=hashlib.sha256(b"fixture").hexdigest())
+        manifest.write_text(json.dumps(pins))
         binary = self.root / "bin"
         binary.mkdir()
         self.runtime = self.root / "run"
@@ -68,7 +85,7 @@ class RecorderTests(unittest.TestCase):
         self.addCleanup(self.stop_worker)
 
     def call(self, *args):
-        data = subprocess.check_output([sys.executable, CLI, *args], env=self.env, timeout=5)
+        data = subprocess.check_output([sys.executable, self.cli, *args], env=self.env, timeout=5)
         return json.loads(data)
 
     def wait_for(self, *phases):
@@ -83,6 +100,152 @@ class RecorderTests(unittest.TestCase):
     def stop_worker(self):
         self.call("stop")
         self.wait_for("ready", "idle", "error")
+
+    def install_widget(self):
+        omarchy = self.root / ".config/omarchy"
+        plugin = omarchy / "plugins" / PLUGIN_ID
+        plugin.parent.mkdir(parents=True)
+        plugin.symlink_to(self.cli.parent.parent, target_is_directory=True)
+        self.shell_config = omarchy / "shell.json"
+        self.set_layout({"centerEnd": [{"id": PLUGIN_ID}]})
+        return plugin
+
+    def set_layout(self, layout, disabled=()):
+        self.shell_config.write_text(json.dumps({
+            "version": 1, "bar": {"layout": layout}, "disabledPlugins": list(disabled)
+        }))
+
+    def start_widget(self, plugin):
+        command = [sys.executable, "-B", plugin / "scripts/recorder.py", "start"]
+        return json.loads(subprocess.check_output(command, env=self.env, timeout=5))
+
+    def published_state(self):
+        return json.loads((self.runtime / "omarchy-voice-recorder/state.json").read_text())
+
+    def wait_for_published_phase(self, phase):
+        until = time.monotonic() + 8
+        while time.monotonic() < until:
+            state = self.published_state()
+            if state["phase"] == phase:
+                return state
+            time.sleep(0.04)
+        self.fail(f"Expected worker to publish {phase}, last state was {state}")
+
+    def wait_for_marker(self, name):
+        until = time.monotonic() + 4
+        path = self.runtime / name
+        while time.monotonic() < until:
+            try:
+                value = path.read_text()
+            except FileNotFoundError:
+                value = ""
+            if value:
+                return value
+            time.sleep(0.02)
+        self.fail(f"Expected {name}")
+
+    def assert_finalized(self, state, pid):
+        self.assertFalse(Path(f"/proc/{pid}").exists())
+        with wave.open(state["original"], "rb") as audio:
+            self.assertGreater(audio.getnframes(), 0)
+            self.assertEqual((audio.getnchannels(), audio.getsampwidth(), audio.getframerate()), (1, 2, 48000))
+            self.assertEqual(len(audio.readframes(audio.getnframes())), audio.getnframes() * 2)
+        if state["phase"] == "ready":
+            self.assertTrue(Path(state["cleaned"]).is_file())
+
+    def test_removing_widget_finalizes_capture_after_move_and_config_recovery(self):
+        plugin = self.install_widget()
+        self.start_widget(plugin)
+        original = self.wait_for_published_phase("recording")
+        pid = self.wait_for_marker("capture-pid")
+
+        self.shell_config.write_text("{")
+        time.sleep(0.4)
+        self.assertEqual(self.published_state(), original)
+        self.shell_config.write_text(json.dumps({"bar": {"layout": {}}}))
+        time.sleep(0.3)
+        self.assertEqual(self.published_state(), original)
+        self.set_layout({"centerEnd": [], "left": [{"id": PLUGIN_ID}], "tray": [PLUGIN_ID]})
+        time.sleep(0.3)
+        self.set_layout({"left": [], "tray": [PLUGIN_ID]})
+        time.sleep(0.3)
+        self.assertEqual(self.published_state(), original)
+
+        self.set_layout({"left": [], "tray": ["omarchy.audio"]})
+        saved = self.wait_for_published_phase("ready")
+        self.assertEqual(saved["take"], original["take"])
+        self.assert_finalized(saved, pid)
+
+    def test_disabling_widget_while_recording_starts_finalizes_audio_already_captured(self):
+        plugin = self.install_widget()
+        (self.runtime / "slow-input").touch()
+        self.start_widget(plugin)
+        pid = self.wait_for_marker("capture-pid")
+        self.assertEqual(self.published_state()["phase"], "starting")
+        self.set_layout({"centerEnd": [{"id": PLUGIN_ID}]}, disabled=[PLUGIN_ID])
+        self.assert_finalized(self.wait_for_published_phase("ready"), pid)
+
+    def test_unlinking_widget_finalizes_original_with_missing_model(self):
+        plugin = self.install_widget()
+        self.start_widget(plugin)
+        self.wait_for_published_phase("recording")
+        pid = self.wait_for_marker("capture-pid")
+        self.weights.unlink()
+        plugin.unlink()
+        failed = self.wait_for_published_phase("error")
+        self.assertEqual(failed["error"], "model")
+        self.assertEqual(failed["cleaned"], "")
+        self.assert_finalized(failed, pid)
+
+    def test_replacing_widget_link_finalizes_capture(self):
+        plugin = self.install_widget()
+        self.start_widget(plugin)
+        self.wait_for_published_phase("recording")
+        pid = self.wait_for_marker("capture-pid")
+        replacement = plugin.with_name(".replacement")
+        replacement.symlink_to(plugin.resolve(), target_is_directory=True)
+        replacement.replace(plugin)
+        self.assert_finalized(self.wait_for_published_phase("ready"), pid)
+
+    def test_missing_shell_config_eventually_finalizes_capture(self):
+        plugin = self.install_widget()
+        self.start_widget(plugin)
+        self.wait_for_published_phase("recording")
+        pid = self.wait_for_marker("capture-pid")
+        self.shell_config.unlink()
+        self.assert_finalized(self.wait_for_published_phase("ready"), pid)
+
+    def assert_start_canceled(self, change_installation):
+        plugin = self.install_widget()
+        # Block the detached interpreter before it reads the application state.
+        (self.root / "sitecustomize.py").write_text("""
+import os, pathlib, sys, time
+if sys.argv[1:3] == ["_worker", "capture"]:
+    runtime = pathlib.Path(os.environ["XDG_RUNTIME_DIR"])
+    (runtime / "worker-waiting").write_text("ready")
+    while (runtime / "delay-worker").exists():
+        time.sleep(0.01)
+""")
+        self.env["PYTHONPATH"] = str(self.root)
+        gate = self.runtime / "delay-worker"
+        gate.touch()
+        try:
+            started = self.start_widget(plugin)
+            self.assertEqual(started["phase"], "starting")
+            self.wait_for_marker("worker-waiting")
+            change_installation(plugin)
+        finally:
+            gate.unlink()
+        state = self.wait_for_published_phase("error")
+        self.assertEqual(state["error"], "interrupted")
+        self.assertFalse((self.runtime / "capture-pid").exists())
+        self.assertFalse((Path(started["take"]) / "original.wav").exists())
+
+    def test_disabling_widget_before_worker_begins_keeps_microphone_closed(self):
+        self.assert_start_canceled(lambda _: self.set_layout({"centerEnd": []}))
+
+    def test_unlinking_widget_before_worker_begins_keeps_microphone_closed(self):
+        self.assert_start_canceled(Path.unlink)
 
     def test_concurrent_start_and_normal_stop(self):
         chosen = self.root / "Звук & Voice"
@@ -180,6 +343,20 @@ class RecorderTests(unittest.TestCase):
         when = state_file.stat().st_mtime_ns
         self.call("status")
         self.assertEqual(state_file.stat().st_mtime_ns, when)
+
+    def test_bad_cached_weights_never_reach_file_enhancer(self):
+        self.call("start")
+        self.wait_for("recording")
+        self.weights.write_bytes(b"changed")  # Same length as the approved fixture.
+        self.call("stop")
+        stopped = self.wait_for("error")
+        self.assertEqual(stopped["error"], "model")
+        self.assertFalse((self.runtime / "model").exists())
+        self.assertFalse(stopped["cleaned"])
+        self.assertTrue(Path(stopped["original"]).is_file())
+        self.weights.write_bytes(b"fixture")
+        self.call("retry")
+        self.assertTrue(self.wait_for("ready")["cleaned"])
 
     def test_missing_selected_folder_is_not_recreated(self):
         disk = self.root / "external"

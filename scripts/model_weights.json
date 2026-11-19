@@ -1,0 +1,37 @@
+{
+  "revision": "dd6818d00f50c836fed43a6243ebe49116de5964",
+  "models": {
+    "baseline": {
+      "size": 8722707,
+      "sha256": "371d26182aff0e1e0d31354e24c81f79cd57458f5a7dd003fc10a7ebf64255e0"
+    },
+    "dpdfnet2": {
+      "size": 10178747,
+      "sha256": "4f0ee28935b4a32abecc717d745416976565834d839601acf43031094b4dc94c"
+    },
+    "dpdfnet2_48khz_hr": {
+      "size": 10493337,
+      "sha256": "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b"
+    },
+    "dpdfnet2_8khz": {
+      "size": 10188357,
+      "sha256": "6218f1dbd6e4bac5768c63b7d899fe7b84b3788f2a35c4e246d4ab0946165c5d"
+    },
+    "dpdfnet4": {
+      "size": 11633337,
+      "sha256": "42a386d3601922f474c4309927e1f471cce422e9bd8e3fd3967bb943bac36c01"
+    },
+    "dpdfnet8": {
+      "size": 14542517,
+      "sha256": "899d4f23f3ff86edbffa8c537e4bcbdc49da1b4e84e0ef390611e0604a3b26cb"
+    },
+    "dpdfnet8_48khz_hr": {
+      "size": 14857107,
+      "sha256": "7b3afbb260a08fe9af3d16e3bda992971be1e7e951d1dee7c2d235f5c43f5631"
+    },
+    "dpdfnet8_8khz": {
+      "size": 14552127,
+      "sha256": "c061bcc56b803fa2fa97d448a45db6d966f7d17aff1304e464455d748745ea62"
+    }
+  }
+}

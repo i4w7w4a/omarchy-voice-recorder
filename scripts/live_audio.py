@@ -14,6 +14,7 @@ import sys
 import time
 
 from gpu_stream import CudaStream, CudaUnavailable, prepare_libraries
+from model_weights import ModelIntegrityError, verified_model_path
 from recorder import MODELS, STRENGTHS, model_dir, subprocess_guard
 
 SOURCE_NAME = "dpdfnet_clean_microphone"
@@ -83,6 +84,8 @@ def select_engine(preferred, device):
             gpu = CudaStream(preferred, selected_weights)
             if meets_deadline(gpu, noise):
                 return preferred, "cuda", gpu
+        except ModelIntegrityError as exc:
+            raise LiveError("model") from exc
         except Exception as exc:
             # ORT exposes driver, cuDNN and provider failures as different Python
             # exception classes. The auto mode may still use the CPU engine.
@@ -95,7 +98,8 @@ def select_engine(preferred, device):
         if not path.is_file():
             continue
         try:
-            enhancer = StreamEnhancer(model=model, onnx_path=path)
+            with verified_model_path(model, path) as weights:
+                enhancer = StreamEnhancer(model=model, onnx_path=weights)
         except (OSError, RuntimeError, ValueError) as exc:
             raise LiveError("model") from exc
         if meets_deadline(enhancer, noise):

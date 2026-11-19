@@ -18,6 +18,10 @@ import tempfile
 import time
 import wave
 
+import plugin_lifecycle
+from model_weights import ModelIntegrityError, model_dir, verified_model_path
+
+SCRIPT = Path(__file__).resolve()
 APP = "omarchy-voice-recorder"
 HOME = Path.home()
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / APP
@@ -200,12 +204,6 @@ def latest(folder, prefs, review_take=None):
     return state
 
 
-def model_dir():
-    cache = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "dpdfnet"
-    cache = Path(os.environ.get("DPDFNET_CACHE_DIR", cache))
-    return Path(os.environ.get("DPDFNET_MODEL_DIR", cache / "models")).expanduser()
-
-
 def weights_installed(directory, model):
     weights = directory / (model + ".onnx")
     try:
@@ -251,7 +249,10 @@ def subprocess_guard(on_parent_death):
     return guard
 
 
-def capture(state):
+def capture(state, installation):
+    widget = plugin_lifecycle.WidgetLifecycle(__file__, installation)
+    if STOP.exists() or not widget.available():
+        raise RecorderError("interrupted")
     path = Path(state["take"]) / "original.wav"
     command = ["pw-record", "--rate", "48000", "--channels", "1", "--format", "s16", path]
     with subprocess.Popen(command, preexec_fn=subprocess_guard(signal.SIGINT)) as recorder:
@@ -259,14 +260,16 @@ def capture(state):
         try:
             start = time.time()
             deadline = time.monotonic() + 6
-            while recorder.poll() is None and not STOP.exists():
+            while recorder.poll() is None:
+                if STOP.exists() or not widget.available():
+                    stopped = True
+                    break
                 if state["phase"] == "starting":
                     if path.is_file() and path.stat().st_size > 512:
                         update(state, phase="recording", startedAt=start)
                     elif time.monotonic() >= deadline:
                         raise RecorderError("no-input")
                 time.sleep(0.08)
-            stopped = STOP.exists()
         finally:
             if recorder.poll() is None:
                 recorder.send_signal(signal.SIGINT)
@@ -294,13 +297,13 @@ def enhance(state, mode):
     else:
         cleaned = primary
     temp = cleaned.with_name("." + cleaned.stem + ".partial.wav")
-    # CLI model resolution normally permits automatic downloads. Force a local-only
-    # failure if weights disappear after our preflight check.
-    env = dict(os.environ, DPDFNET_HF_BASE_URL="file:///dev/null", DPDFNET_DOWNLOAD_RETRIES="1")
     command = [engine(model), "enhance", state["original"], temp, "--model", model,
                "--attn-limit-db", str(strength)]
     try:
-        result = subprocess.run(command, env=env, preexec_fn=subprocess_guard(signal.SIGTERM))
+        with verified_model_path(model) as weights:
+            env = dict(os.environ, DPDFNET_MODEL_DIR=str(weights.parent),
+                       DPDFNET_HF_BASE_URL="file:///dev/null", DPDFNET_DOWNLOAD_RETRIES="1")
+            result = subprocess.run(command, env=env, preexec_fn=subprocess_guard(signal.SIGTERM))
         if result.returncode or not wav_duration(temp):
             raise RecorderError("enhance")
         if cleaned == primary:
@@ -310,16 +313,18 @@ def enhance(state, mode):
         temp.replace(cleaned)
         update(state, phase="ready", cleaned=str(cleaned), cleanedModel=model,
                cleanedStrength=strength, matched=True)
+    except ModelIntegrityError as exc:
+        raise RecorderError("model") from exc
     finally:
         temp.unlink(missing_ok=True)
 
 
-def worker(mode):
+def worker(mode, installation):
     with serialized():
         state = read_json(STATE)
     try:
         if mode == "capture":
-            capture(state)
+            capture(state, installation)
         enhance(state, mode)
     except (OSError, RecorderError) as exc:
         inspect_take(state)
@@ -328,14 +333,15 @@ def worker(mode):
         update(state, phase="error", startedAt=0, error=error)
 
 
-def launch(state, mode):
+def launch(state, mode, installation=None):
     # The child inherits the locked open file description before Popen returns.
     with (RUNTIME / "worker.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         STOP.unlink(missing_ok=True)
         state.update(phase="starting" if mode == "capture" else "processing", error="", startedAt=0)
         write_json(STATE, state)
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "_worker", mode],
+        subprocess.Popen([sys.executable, "-B", SCRIPT, "_worker", mode,
+                          json.dumps(installation)],
                          pass_fds=(lock.fileno(),), start_new_session=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -407,6 +413,9 @@ def command(action, argument):
                     if state["cleaned"] or not state["take"]:
                         state.update(phase="ready" if state["cleaned"] else "idle", error="")
             elif action == "start":
+                installation = plugin_lifecycle.installed_plugin(__file__, SCRIPT)
+                if not plugin_lifecycle.WidgetLifecycle(__file__, installation).available():
+                    raise RecorderError("interrupted")
                 engine(model)
                 if not shutil.which("pw-record"):
                     raise RecorderError("recorder")
@@ -420,7 +429,7 @@ def command(action, argument):
                     write_json(CONFIG, settings)
                 state = empty_state(target.parent, prefs)
                 state["take"] = str(target)
-                launch(state, "capture")
+                launch(state, "capture", installation)
                 return state
             elif action in {"retry", "reprocess"} and state["original"]:
                 if state["matched"]:
@@ -442,7 +451,7 @@ def main():
     os.umask(0o077)
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
     if sys.argv[1:2] == ["_worker"]:
-        worker(sys.argv[2])
+        worker(sys.argv[2], json.loads(sys.argv[3]))
         return
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)

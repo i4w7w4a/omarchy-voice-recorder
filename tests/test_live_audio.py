@@ -1,4 +1,5 @@
 """Routing decisions that must not depend on the test machine's default microphone."""
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,7 @@ class LiveAudioTests(unittest.TestCase):
             (folder / (preferred + ".onnx")).touch()
             with (patch.dict(sys.modules, {"numpy": MagicMock(), "dpdfnet": MagicMock(StreamEnhancer=cpu)}),
                   patch.object(live_audio, "model_dir", return_value=folder),
+                  patch.object(live_audio, "verified_model_path", side_effect=lambda _, path: nullcontext(path)),
                   patch.object(live_audio, "CudaStream", gpu),
                   patch.object(live_audio, "meets_deadline", return_value=True) as speed):
                 self.assertEqual(live_audio.select_engine(preferred, "auto")[:2], (preferred, "cuda"))

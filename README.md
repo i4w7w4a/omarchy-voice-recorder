@@ -46,6 +46,8 @@ The stream keeps running when you close the panel. The panel shows the active mo
 2. Under **Latest recording**, listen to **Original** and **Cleaned**. To try another sound, open the gear menu, choose a model or noise reduction level, then return and click **Apply to this recording**.
 3. Each new combination renders from the same original. Pick a previously rendered combination for immediate playback. The folder button opens the take and all its versions in your file manager.
 
+Closing the panel lets a recording continue. Disabling the widget or removing it from the bar stops microphone capture and saves the audio collected so far in the take’s `original.wav`.
+
 The default is **DPDFNet-8 at 48 kHz** with **Standard (12 dB)** noise reduction. Try **Gentle (6 dB)** to keep more room sound, or **Strong (24 dB)** for louder backgrounds. Stronger suppression can soften quiet speech.
 
 | Model group | Choices in settings | Audio bandwidth |
@@ -102,7 +104,7 @@ These timings cover model processing. End-to-end latency also includes microphon
 
 Tested on Omarchy 4.5 with Quickshell and PipeWire. The recorder uses system Python 3. The folder chooser uses GTK 4.10+ and PyGObject. Live audio uses `pw-cat`, `pw-dump` and `pactl` with PipeWire’s PulseAudio compatibility service. On Omarchy, install missing packages with `omarchy pkg add`. Package names include `python`, `python-gobject`, `gtk4`, `pipewire`, `pipewire-audio`, `pipewire-pulse`, `libpulse`, `xdg-utils`, `xdg-user-dirs` and `uv`.
 
-- **CPU engine.** `scripts/install-engine` uses `uv` to create a per-user Python 3.13 environment in `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv`, install `dpdfnet==0.6.0` and fetch all eight official ONNX models. You can rerun it after an interrupted download or to upgrade an older single-model install. It reuses complete models and verifies each one.
+- **CPU engine.** `scripts/install-engine` uses `uv` to create a per-user Python 3.13 environment in `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv`, install `dpdfnet==0.6.0` and fetch all eight official ONNX models. You can rerun it after an interrupted download or to upgrade an older single-model install. It fetches models from a fixed publisher revision and checks the size and SHA-256 of downloaded and cached weights. The file and live engines verify the selected bytes again before loading them. [Pinned model hashes](scripts/model_weights.json) · [Upstream snapshot](https://huggingface.co/Ceva-IP/DPDFNet/tree/dd6818d00f50c836fed43a6243ebe49116de5964/onnx)
 - **GPU engine.** `scripts/install-gpu` creates a separate Python 3.12 environment under `${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/gpu-venv` for ONNX Runtime GPU and CUDA 12 libraries. The tested GPU environment uses about **2.8 GiB**, plus the package download cache.
 - **Shared model cache.** Both engines use `${XDG_CACHE_HOME:-$HOME/.cache}/dpdfnet/models` by default. The CPU recorder can also use an existing `dpdfnet` on the shell’s `PATH` with the selected model cached.
 - **Preferences.** Settings live at `${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-voice-recorder/settings.json`. Set **Interface language** to **System**, **English** or **Русский** for an immediate update.
@@ -117,9 +119,11 @@ Tested on Omarchy 4.5 with Quickshell and PipeWire. The recorder uses system Pyt
 
 **Для записи.** Нажмите значок правой кнопкой, произнесите фразу и нажмите ещё раз, чтобы закончить запись и запустить очистку. В панели можно прослушать исходник и очищенный голос. В настройках под шестерёнкой выбираются папка, модель и сила подавления. Чтобы сравнить две настройки на одной фразе, выберите вторую комбинацию и примените её к этой записи. Новый WAV появится в `variants/` рядом с исходными файлами дубля.
 
+При отключении виджета диктофон останавливает захват микрофона и сохраняет уже записанный звук в `original.wav`. Простое закрытие панели позволяет продолжать запись.
+
 ## Uninstall
 
-Finish the active recording and disable **Clean microphone**, then run `omarchy plugin remove re_pick.voice-recorder`. Your takes stay in the folder you chose. The Python environments and model cache are separate from the widget and may also serve other audio tools.
+Run `omarchy plugin remove re_pick.voice-recorder` to uninstall. Removing the widget stops an active capture and finalizes the recorded audio. Your takes stay in the folder you chose. The Python environments and model cache are separate from the widget and may also serve other audio tools.
 
 ## Development and license
 

@@ -41,9 +41,7 @@ class LiveTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         scripts = self.root / "scripts"
-        scripts.mkdir()
-        for name in ("live.py", "recorder.py"):
-            shutil.copyfile(SCRIPTS / name, scripts / name)
+        shutil.copytree(SCRIPTS, scripts, ignore=shutil.ignore_patterns("__pycache__"))
         (scripts / "live_audio.py").write_text(FAKE_AUDIO)
         self.cli = scripts / "live.py"
         self.runtime = self.root / "runtime"
@@ -188,7 +186,7 @@ class LiveTests(unittest.TestCase):
         plugin.parent.mkdir(parents=True)
         plugin.symlink_to(self.cli.parent.parent, target_is_directory=True)
         config = omarchy / "shell.json"
-        config.write_text(json.dumps({"bar": {"layout": {"centerEnd": [{"id": plugin.name}]}}}))
+        config.write_text(json.dumps({"version": 1, "bar": {"layout": {"centerEnd": [{"id": plugin.name}]}}}))
         return plugin, config
 
     def test_uninstall_stops_audio(self):
@@ -207,7 +205,7 @@ class LiveTests(unittest.TestCase):
         config.write_text("{")
         time.sleep(2.4)
         self.assertEqual(self.call("status")["phase"], "on")
-        config.write_text(json.dumps({"bar": {"layout": {"centerEnd": [{"id": "omarchy.elsewhen"}]}}}))
+        config.write_text(json.dumps({"version": 1, "bar": {"layout": {"centerEnd": [{"id": "omarchy.elsewhen"}]}}}))
         self.assertEqual(self.await_phase("off")["error"], "")
         self.assertEqual(self.call("status")["phase"], "off")
 
