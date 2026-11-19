@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the optional per-user CPU engine and its 48 kHz model.
+# Install the per-user CPU engine and all eight models in its registry.
 set -euo pipefail
 
 if ! command -v uv >/dev/null; then
@@ -8,7 +8,6 @@ if ! command -v uv >/dev/null; then
 fi
 
 engine_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv"
-model=dpdfnet2_48khz_hr
 if [[ ! -f "$engine_dir/pyvenv.cfg" ]]; then
   if [[ -e "$engine_dir" ]]; then
     echo "The engine directory already exists and is not a virtual environment: $engine_dir" >&2
@@ -17,5 +16,19 @@ if [[ ! -f "$engine_dir/pyvenv.cfg" ]]; then
   uv venv --python 3.13 "$engine_dir"
 fi
 uv pip install --python "$engine_dir/bin/python" 'dpdfnet==0.6.0'
-"$engine_dir/bin/dpdfnet" download "$model"
+"$engine_dir/bin/dpdfnet" download
+# The upstream downloader reuses any nonempty cached file. Open each model
+# with the engine to catch an incomplete or corrupt cache from an earlier run.
+"$engine_dir/bin/python" - <<'PY'
+from dpdfnet import StreamEnhancer, available_models, download
+
+for entry in available_models():
+    name = entry["name"]
+    try:
+        StreamEnhancer(model=name)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"Could not open {name} ({error}). Fetching a fresh copy.", flush=True)
+        download(name, force=True)
+        StreamEnhancer(model=name)
+PY
 printf 'Engine ready: %s\n' "$engine_dir/bin/dpdfnet"

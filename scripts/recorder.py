@@ -24,7 +24,18 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / APP / "settings.json"
 STATE = RUNTIME / "state.json"
 STOP = RUNTIME / "stop"
-MODEL = "dpdfnet2_48khz_hr"
+DEFAULT_MODEL = "dpdfnet2_48khz_hr"
+MODELS = {
+    "dpdfnet2_48khz_hr": ("DPDFNet-2", 48000),
+    "dpdfnet8_48khz_hr": ("DPDFNet-8", 48000),
+    "baseline": ("Baseline", 16000),
+    "dpdfnet2": ("DPDFNet-2", 16000),
+    "dpdfnet4": ("DPDFNet-4", 16000),
+    "dpdfnet8": ("DPDFNet-8", 16000),
+    "dpdfnet2_8khz": ("DPDFNet-2", 8000),
+    "dpdfnet8_8khz": ("DPDFNet-8", 8000),
+}
+STRENGTHS = (6, 12, 24)
 ACTIVE = {"starting", "recording", "processing"}
 TAKE_NAME = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{6}")
 
@@ -36,7 +47,8 @@ class RecorderError(Exception):
 def read_json(path):
     try:
         with path.open() as source:
-            return json.load(source)
+            value = json.load(source)
+            return value if isinstance(value, dict) else {}
     except (FileNotFoundError, ValueError):
         return {}
 
@@ -82,9 +94,10 @@ def selected_folder(settings):
     return music / "DPDFNet"
 
 
-def empty_state(folder, strength):
+def empty_state(folder, model, strength):
     return dict(phase="idle", folder=str(folder), take="", original="", cleaned="",
-                startedAt=0, duration=0, error="", strength=strength)
+                startedAt=0, duration=0, error="", model=model, strength=strength,
+                models=list_models(), matched=False, cleanedModel="", cleanedStrength=0)
 
 
 def wav_duration(path):
@@ -101,26 +114,67 @@ def wav_duration(path):
         return 0
 
 
+def variant_path(take, model, strength):
+    return take / "variants" / f"{model}-{strength}dB.wav"
+
+
 def inspect_take(state):
     take = Path(state["take"])
-    original, cleaned = take / "original.wav", take / "cleaned.wav"
+    original = take / "original.wav"
     duration = wav_duration(original)
     state.update(original=str(original) if duration else "", duration=duration,
-                 cleaned=str(cleaned) if duration and wav_duration(cleaned) else "")
+                 cleaned="", matched=False, cleanedModel="", cleanedStrength=0)
+    if not duration:
+        return
+
+    model, strength = state["model"], state["strength"]
+    primary = take / "cleaned.wav"
+    if wav_duration(primary):
+        metadata = take / "cleaned.json"
+        try:
+            provenance = read_json(metadata)
+        except OSError:
+            provenance = {}
+        # Older releases supported one model and did not save the attenuation limit.
+        rendered_model = provenance.get("model", "" if metadata.exists() else DEFAULT_MODEL)
+        rendered_strength = provenance.get("strength", 0)
+        if not isinstance(rendered_model, str) or rendered_model not in MODELS:
+            rendered_model = ""
+        if rendered_strength not in STRENGTHS:
+            rendered_strength = 0
+        match = (rendered_model, rendered_strength) == (model, strength)
+        state.update(cleaned=str(primary), matched=match, cleanedModel=rendered_model,
+                     cleanedStrength=rendered_strength)
+        if match:
+            return
+
+    variant = variant_path(take, model, strength)
+    if wav_duration(variant):
+        state.update(cleaned=str(variant), matched=True, cleanedModel=model, cleanedStrength=strength)
 
 
-def latest(folder, strength):
-    state = empty_state(folder, strength)
+def restore_take(state, take):
+    state["take"] = str(take)
+    inspect_take(state)
+    if state["original"]:
+        state.update(phase="ready" if state["cleaned"] else "error",
+                     error="" if state["cleaned"] else "interrupted")
+        return True
+    return False
+
+
+def latest(folder, model, strength, review_take=None):
+    state = empty_state(folder, model, strength)
     try:
+        if review_take:
+            take = Path(review_take)
+            if take.is_absolute() and TAKE_NAME.fullmatch(take.name) and restore_take(state, take):
+                return state
         with os.scandir(folder) as entries:
             names = sorted((e.name for e in entries if TAKE_NAME.fullmatch(e.name)
                             and e.is_dir(follow_symlinks=False)), reverse=True)
         for name in names:
-            state["take"] = str(folder / name)
-            inspect_take(state)
-            if state["original"]:
-                state.update(phase="ready" if state["cleaned"] else "error",
-                             error="" if state["cleaned"] else "interrupted")
+            if restore_take(state, folder / name):
                 return state
     except FileNotFoundError:
         pass
@@ -130,16 +184,32 @@ def latest(folder, strength):
     return state
 
 
-def engine():
+def model_dir():
+    cache = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "dpdfnet"
+    cache = Path(os.environ.get("DPDFNET_CACHE_DIR", cache))
+    return Path(os.environ.get("DPDFNET_MODEL_DIR", cache / "models")).expanduser()
+
+
+def weights_installed(directory, model):
+    weights = directory / (model + ".onnx")
+    try:
+        return weights.is_file() and weights.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def list_models():
+    directory = model_dir()
+    return [dict(id=model, label=label, rate=rate, installed=weights_installed(directory, model))
+            for model, (label, rate) in MODELS.items()]
+
+
+def engine(model):
     local = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "dpdfnet/venv/bin/dpdfnet"
     binary = str(local) if os.access(local, os.X_OK) else shutil.which("dpdfnet")
     if not binary:
         raise RecorderError("engine")
-    cache = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache")) / "dpdfnet"
-    cache = Path(os.environ.get("DPDFNET_CACHE_DIR", cache))
-    models = Path(os.environ.get("DPDFNET_MODEL_DIR", cache / "models")).expanduser()
-    weights = models / (MODEL + ".onnx")
-    if not weights.is_file() or not weights.stat().st_size:
+    if not weights_installed(model_dir(), model):
         raise RecorderError("model")
     return binary
 
@@ -194,22 +264,33 @@ def capture(state):
         raise RecorderError("empty")
 
 
-def enhance(state):
+def enhance(state, mode):
     update(state, phase="processing", startedAt=0, error="")
     folder = Path(state["take"])
-    temp = folder / ".cleaned.partial.wav"
+    model, strength = state["model"], state["strength"]
+    primary = folder / "cleaned.wav"
+    if mode == "reprocess" or primary.exists():
+        cleaned = variant_path(folder, model, strength)
+        cleaned.parent.mkdir(mode=0o700, exist_ok=True)
+    else:
+        cleaned = primary
+    temp = cleaned.with_name("." + cleaned.stem + ".partial.wav")
     # CLI model resolution normally permits automatic downloads. Force a local-only
     # failure if weights disappear after our preflight check.
     env = dict(os.environ, DPDFNET_HF_BASE_URL="file:///dev/null", DPDFNET_DOWNLOAD_RETRIES="1")
-    command = [engine(), "enhance", state["original"], temp, "--model", MODEL,
-               "--attn-limit-db", str(state["strength"])]
+    command = [engine(model), "enhance", state["original"], temp, "--model", model,
+               "--attn-limit-db", str(strength)]
     try:
         result = subprocess.run(command, env=env, preexec_fn=subprocess_guard(signal.SIGTERM))
         if result.returncode or not wav_duration(temp):
             raise RecorderError("enhance")
-        cleaned = folder / "cleaned.wav"
+        if cleaned == primary:
+            # Publish provenance before the first WAV. A crash between these writes
+            # leaves no playable primary to be mistaken for a legacy recording.
+            write_json(folder / "cleaned.json", {"model": model, "strength": strength})
         temp.replace(cleaned)
-        update(state, phase="ready", cleaned=str(cleaned))
+        update(state, phase="ready", cleaned=str(cleaned), cleanedModel=model,
+               cleanedStrength=strength, matched=True)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -220,7 +301,7 @@ def worker(mode):
     try:
         if mode == "capture":
             capture(state)
-        enhance(state)
+        enhance(state, mode)
     except (OSError, RecorderError) as exc:
         inspect_take(state)
         error = str(exc) if isinstance(exc, RecorderError) else (
@@ -245,8 +326,18 @@ def command(action, argument):
         saved = read_json(STATE)
         settings = read_json(CONFIG)
         strength = settings.get("strength", 12)
-        state = dict(saved) if saved else latest(selected_folder(settings), strength)
-        state.setdefault("strength", strength)
+        if strength not in STRENGTHS:
+            strength = 12
+        model = settings.get("model", DEFAULT_MODEL)
+        if not isinstance(model, str) or model not in MODELS:
+            model = DEFAULT_MODEL
+        if saved:
+            state = dict(saved, strength=strength, model=model, models=list_models())
+            state.setdefault("matched", False)
+            state.setdefault("cleanedModel", "")
+            state.setdefault("cleanedStrength", 0)
+        else:
+            state = latest(selected_folder(settings), model, strength, settings.get("reviewTake"))
         if worker_busy():
             if action == "stop" and state["phase"] in {"starting", "recording"}:
                 STOP.touch()
@@ -269,16 +360,32 @@ def command(action, argument):
                 # Test actual permissions, including ACLs and read-only mounts.
                 with tempfile.TemporaryFile(dir=folder):
                     pass
+                unfinished = state["original"] and not state["cleaned"]
+                settings.pop("reviewTake", None)
+                if unfinished and folder != Path(state["take"]).parent:
+                    # Keep the source available for retry even after the next login.
+                    settings["reviewTake"] = state["take"]
                 write_json(CONFIG, dict(settings, folder=str(folder), mountRoot=folder.is_mount()))
-                if state["original"] and not state["cleaned"]:
+                if unfinished:
                     state["folder"] = str(folder)
                 else:
-                    state = latest(folder, strength)
-            elif action == "set-strength":
-                write_json(CONFIG, dict(settings, strength=argument))
-                state["strength"] = argument
+                    state = latest(folder, model, strength)
+            elif action in {"set-strength", "set-model"}:
+                field = "strength" if action == "set-strength" else "model"
+                if field == "model" and argument not in MODELS:
+                    raise RecorderError("model")
+                settings[field] = argument
+                write_json(CONFIG, settings)
+                state[field] = argument
+                if state["take"]:
+                    inspect_take(state)
+                if state["phase"] == "ready" and not state["cleaned"]:
+                    state.update(phase="error", error="interrupted")
+                elif state["error"] in {"enhance", "model", "engine", "interrupted"}:
+                    if state["cleaned"] or not state["take"]:
+                        state.update(phase="ready" if state["cleaned"] else "idle", error="")
             elif action == "start":
-                engine()
+                engine(model)
                 if not shutil.which("pw-record"):
                     raise RecorderError("recorder")
                 folder = Path(state["folder"])
@@ -287,14 +394,19 @@ def command(action, argument):
                 target = folder / datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
                 # A vanished user-selected destination may have been on a removable disk.
                 target.mkdir(parents=not settings.get("folder"), mode=0o700)
-                state = empty_state(target.parent, strength)
+                if settings.pop("reviewTake", None):
+                    write_json(CONFIG, settings)
+                state = empty_state(target.parent, model, strength)
                 state["take"] = str(target)
                 launch(state, "capture")
                 return state
-            elif action == "retry" and state["original"] and not state["cleaned"]:
-                engine()
-                launch(state, "enhance")
-                return state
+            elif action in {"retry", "reprocess"} and state["original"]:
+                if state["matched"]:
+                    state.update(phase="ready", error="")
+                else:
+                    engine(model)
+                    launch(state, action)
+                    return state
         except (RecorderError, OSError) as exc:
             state.update(phase="error", error=str(exc) if isinstance(exc, RecorderError) else "folder",
                          startedAt=0)
@@ -312,10 +424,11 @@ def main():
         return
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
-    for action in ("status", "start", "stop", "retry"):
+    for action in ("status", "start", "stop", "retry", "reprocess"):
         actions.add_parser(action)
     actions.add_parser("set-folder").add_argument("argument", metavar="PATH")
-    actions.add_parser("set-strength").add_argument("argument", type=int, choices=(6, 12, 24))
+    actions.add_parser("set-strength").add_argument("argument", type=int, choices=STRENGTHS)
+    actions.add_parser("set-model").add_argument("argument", metavar="ID")
     args = parser.parse_args()
     print(json.dumps(command(args.action, getattr(args, "argument", None)), ensure_ascii=False))
 

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import wave
 
 CLI = Path(__file__).resolve().parents[1] / "scripts/recorder.py"
 
@@ -35,7 +36,9 @@ FAKE_ENHANCE = """
 import os, pathlib, shutil, sys
 runtime = pathlib.Path(os.environ["XDG_RUNTIME_DIR"])
 (runtime / "strength").write_text(sys.argv[-1])
+(runtime / "model").write_text(sys.argv[sys.argv.index("--model") + 1])
 if (runtime / "fail-engine").exists():
+    pathlib.Path(sys.argv[3]).write_bytes(b"incomplete WAV")
     sys.exit(1)
 shutil.copyfile(sys.argv[2], sys.argv[3])
 """
@@ -92,6 +95,7 @@ class RecorderTests(unittest.TestCase):
         self.assertGreater(recording["startedAt"], 0)
         self.assertFalse(recording["original"])
         self.assertEqual(self.call("set-strength", "24")["strength"], 6)
+        self.assertEqual(self.call("set-model", "baseline")["model"], "dpdfnet2_48khz_hr")
         self.call("stop")
         self.call("stop")
         ready = self.wait_for("ready")
@@ -116,6 +120,8 @@ class RecorderTests(unittest.TestCase):
         chosen.mkdir()
         self.assertEqual(self.call("set-folder", str(chosen))["take"], failed["take"])
         self.call("set-strength", "24")
+        shutil.rmtree(self.runtime / "omarchy-voice-recorder")
+        self.assertEqual(self.call("status")["original"], failed["original"])
         (self.runtime / "fail-engine").unlink()
         self.call("retry")
         ready = self.wait_for("ready")
@@ -165,6 +171,115 @@ class RecorderTests(unittest.TestCase):
         path.write_text(json.dumps(dict(json.loads(path.read_text()), mountRoot=True)))
         self.assertEqual(self.call("start")["error"], "folder")
         self.assertEqual(list(mount.iterdir()), [])
+
+    def test_model_registry_and_selection_validation(self):
+        state = self.call("status")
+        self.assertEqual([row["rate"] for row in state["models"]], [48000]*2 + [16000]*4 + [8000]*2)
+        self.assertEqual([row["id"] for row in state["models"] if row["installed"]], [state["model"]])
+        self.assertEqual(self.call("set-model", "bogus/../model")["error"], "model")
+        self.assertEqual(self.call("status")["model"], state["model"])
+        self.assertEqual(self.call("set-model", "baseline")["model"], "baseline")
+        self.assertEqual(self.call("start")["error"], "model")
+        shutil.rmtree(self.runtime / "omarchy-voice-recorder")
+        self.assertEqual(self.call("status")["model"], "baseline")
+
+    def test_compare_models_on_one_take_and_reuse_cached_render(self):
+        for model in ("baseline", "dpdfnet2_8khz"):
+            (self.weights.parent / f"{model}.onnx").write_bytes(b"fixture")
+        self.call("set-model", "baseline")
+        self.call("set-strength", "6")
+        self.call("start")
+        self.wait_for("recording")
+        self.call("stop")
+        first = self.wait_for("ready")
+        self.assertTrue(first["matched"])
+        self.assertEqual((first["cleanedModel"], first["cleanedStrength"]), ("baseline", 6))
+        self.assertEqual((self.runtime / "model").read_text(), "baseline")
+        take = Path(first["take"])
+        meta = json.loads((take / "cleaned.json").read_text())
+        self.assertEqual(meta, dict(model="baseline", strength=6))
+        original, primary = take / "original.wav", take / "cleaned.wav"
+        before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in (original, primary)]
+        fallback = self.call("set-model", "dpdfnet2_8khz")
+        self.assertFalse(fallback["matched"])
+        self.assertEqual((fallback["cleaned"], fallback["cleanedModel"]), (str(primary), "baseline"))
+        self.call("set-strength", "24")
+        self.call("reprocess")
+        second = self.wait_for("ready")
+        self.assertEqual((second["cleanedModel"], second["cleanedStrength"]), ("dpdfnet2_8khz", 24))
+        self.assertTrue(second["matched"])
+        self.assertEqual((self.runtime / "model").read_text(), "dpdfnet2_8khz")
+        variant = Path(second["cleaned"])
+        self.assertEqual(variant, take / "variants/dpdfnet2_8khz-24dB.wav")
+        self.assertEqual(before, [(p.read_bytes(), p.stat().st_mtime_ns) for p in (original, primary)])
+        (self.weights.parent / "dpdfnet2_8khz.onnx").unlink()
+        when = variant.stat().st_mtime_ns
+        self.assertEqual(self.call("reprocess")["phase"], "ready")
+        self.assertEqual(variant.stat().st_mtime_ns, when)
+        self.call("set-model", "baseline")
+        self.assertEqual(self.call("set-strength", "6")["cleaned"], str(primary))
+        self.call("set-model", "dpdfnet2_8khz")
+        self.call("set-strength", "24")
+        shutil.rmtree(self.runtime / "omarchy-voice-recorder")
+        restored = self.call("status")
+        self.assertTrue(restored["matched"])
+        self.assertEqual(restored["cleaned"], str(variant))
+
+    def test_legacy_recording_and_interrupted_comparison_keep_primary(self):
+        folder = self.root / "Recordings"
+        take = folder / "2026-11-19_00-00-00_000001"
+        take.mkdir(parents=True)
+        original, primary = take / "original.wav", take / "cleaned.wav"
+        with wave.open(str(original), "wb") as out:
+            out.setparams((1, 2, 48000, 0, "NONE", "not compressed"))
+            out.writeframes(bytes(9600))
+        shutil.copyfile(original, primary)
+        before = (primary.read_bytes(), primary.stat().st_mtime_ns)
+        legacy = self.call("set-folder", str(folder))
+        self.assertEqual(legacy["cleanedModel"], "dpdfnet2_48khz_hr")
+        self.assertEqual(legacy["cleanedStrength"], 0)
+        self.assertFalse(legacy["matched"])
+        (self.runtime / "fail-engine").touch()
+        self.call("reprocess")
+        failed = self.wait_for("error")
+        self.assertEqual(failed["error"], "enhance")
+        self.assertEqual(failed["cleaned"], str(primary))
+        self.assertFalse(failed["matched"])
+        self.assertEqual(list((take / "variants").iterdir()), [])
+        (self.runtime / "fail-engine").unlink()
+        self.call("retry")
+        ready = self.wait_for("ready")
+        self.assertTrue(ready["matched"])
+        self.assertNotEqual(ready["cleaned"], str(primary))
+        self.assertEqual((primary.read_bytes(), primary.stat().st_mtime_ns), before)
+        self.assertFalse((take / "cleaned.json").exists())
+
+    def test_switching_variants_after_primary_was_removed(self):
+        self.call("start")
+        self.wait_for("recording")
+        self.call("stop")
+        ready = self.wait_for("ready")
+        self.call("set-strength", "6")
+        self.call("reprocess")
+        variant = self.wait_for("ready")["cleaned"]
+        Path(ready["cleaned"]).unlink()
+
+        for action, missing, available in [("set-strength", "12", "6"),
+                                            ("set-model", "baseline", "dpdfnet2_48khz_hr")]:
+            with self.subTest(action=action):
+                absent = self.call(action, missing)
+                self.assertEqual((absent["phase"], absent["error"]), ("error", "interrupted"))
+                self.assertEqual(absent["cleaned"], "")
+                self.assertTrue(absent["original"])
+                self.assertEqual(self.call("status"), absent)
+                restored = self.call(action, available)
+                self.assertEqual((restored["phase"], restored["error"]), ("ready", ""))
+                self.assertEqual(restored["cleaned"], variant)
+                self.assertTrue(restored["matched"])
+
+        self.call("set-folder", str(self.root / "absent"))
+        self.call("set-strength", "24")
+        self.assertEqual(self.call("set-strength", "6")["error"], "folder")
 
 
 if __name__ == "__main__":

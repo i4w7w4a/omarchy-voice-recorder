@@ -15,6 +15,24 @@ PanelKeyCatcher {
   readonly property var words: recorder.words
   readonly property var stateData: recorder.snapshot
   readonly property bool settings: recorder.settingsPage
+  readonly property var models: stateData.models || []
+  readonly property var chosen: models.find(item => item.id === stateData.model) || null
+  readonly property var used: models.find(item => item.id === stateData.cleanedModel) || null
+  readonly property bool canApply: !!stateData.original && !!stateData.cleaned && stateData.matched === false
+  function rateText(rate) { return words.t("model.rate").arg(rate / 1000) }
+  function variantText(model, strength) {
+    if (!model) return ""
+    if (strength > 0) return words.t("model.variant").arg(model.label).arg(rateText(model.rate)).arg(strength)
+    return words.t("model.unknownStrength").arg(model.label).arg(rateText(model.rate))
+  }
+  function selectModel(model) {
+    if (model && model.id !== stateData.model && !recorder.locked) recorder.run(["set-model", model.id])
+  }
+  function selectRate(rate) {
+    const group = models.filter(item => item.rate === rate)
+    selectModel(group.find(item => item.label === chosen?.label)
+                || group.find(item => item.label === "DPDFNet-2") || group[0])
+  }
   readonly property color ink: Commons.Color.popups.text
   readonly property color muted: Util.alpha(ink, 0.72)
   readonly property color highlight: recorder.capturing ? Commons.Color.urgent : Commons.Color.accent
@@ -38,8 +56,8 @@ PanelKeyCatcher {
   }
   function move(step) {
     const available = (settings
-      ? [settingsButton, folderButton, mild, normal, strong]
-      : [mainButton, dry, wet, retryButton, filesButton, settingsButton])
+      ? [settingsButton, fullRate, wideRate, phoneRate, baseModelButton, net2, net4, net8, mild, normal, strong, folderButton]
+      : [mainButton, dry, wet, applyButton, retryButton, filesButton, settingsButton])
       .filter(item => item.visible && item.enabled)
     if (!available.length) return
     const at = available.indexOf(cursor)
@@ -222,6 +240,14 @@ PanelKeyCatcher {
                 onClicked: view.recorder.openFolder(view.stateData.take)
               }
             }
+            Label {
+              width: parent.width
+              visible: !!view.stateData.cleaned && !!view.used
+              wrapMode: Text.WordWrap
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+              text: view.words.t("take.processed").arg(view.variantText(view.used, view.stateData.cleanedStrength))
+            }
             RowLayout {
               width: parent.width
               spacing: Style.space(6)
@@ -250,6 +276,30 @@ PanelKeyCatcher {
               }
             }
           }
+          Column {
+            visible: view.canApply && !view.recorder.working
+            width: parent.width
+            spacing: Style.space(5)
+            Label {
+              width: parent.width
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              text: view.words.t("take.selected").arg(view.variantText(view.chosen, view.stateData.strength))
+            }
+            Action {
+              id: applyButton
+              width: parent.width
+              bordered: true
+              enabled: !view.recorder.locked && !!view.chosen?.installed
+              iconText: "󰑐"
+              text: view.words.t("take.apply")
+              onClicked: {
+                view.recorder.stopSound()
+                view.recorder.run(["reprocess"])
+              }
+            }
+          }
           Action {
             id: retryButton
             visible: view.recorder.canRetry
@@ -268,17 +318,38 @@ PanelKeyCatcher {
           spacing: Style.space(12)
           Column {
             width: parent.width
-            spacing: Style.space(4)
-            Label { text: view.words.t("folder.title"); font.bold: true }
-            Label { width: parent.width; text: view.pathLabel; elide: Text.ElideMiddle; color: view.muted }
-            Action {
-              id: folderButton
+            spacing: Style.space(6)
+            Label { text: view.words.t("model.title"); font.bold: true }
+            RowLayout {
               width: parent.width
-              bordered: true
-              enabled: !view.recorder.locked
-              iconText: "󰉋"
-              text: view.words.t("folder.choose")
-              onClicked: view.recorder.chooseFolder()
+              spacing: Style.space(4)
+              Rate { id: fullRate; rate: 48000 }
+              Rate { id: wideRate; rate: 16000 }
+              Rate { id: phoneRate; rate: 8000 }
+            }
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(4)
+              Variant { id: baseModelButton; label: "Baseline" }
+              Variant { id: net2; label: "DPDFNet-2" }
+              Variant { id: net4; label: "DPDFNet-4" }
+              Variant { id: net8; label: "DPDFNet-8" }
+            }
+            Label {
+              width: parent.width
+              visible: !!view.chosen
+              wrapMode: Text.WordWrap
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+              text: view.chosen ? view.words.t("model.note." + view.chosen.id, "") : ""
+            }
+            Label {
+              width: parent.width
+              visible: !!view.chosen && !view.chosen.installed
+              wrapMode: Text.WordWrap
+              color: Commons.Color.urgent
+              font.pixelSize: Style.font.bodySmall
+              text: view.words.t("model.missing")
             }
           }
           Column {
@@ -300,6 +371,21 @@ PanelKeyCatcher {
               text: view.words.t("strength.note." + (view.stateData.strength || 12))
             }
           }
+          Column {
+            width: parent.width
+            spacing: Style.space(4)
+            Label { text: view.words.t("folder.title"); font.bold: true }
+            Label { width: parent.width; text: view.pathLabel; elide: Text.ElideMiddle; color: view.muted }
+            Action {
+              id: folderButton
+              width: parent.width
+              bordered: true
+              enabled: !view.recorder.locked
+              iconText: "󰉋"
+              text: view.words.t("folder.choose")
+              onClicked: view.recorder.chooseFolder()
+            }
+          }
           Label {
             width: parent.width
             visible: view.recorder.working
@@ -319,14 +405,35 @@ PanelKeyCatcher {
     }
   }
 
-  component Strength: Action {
-    required property int value
+  component Segment: Action {
     Layout.fillWidth: true
     Layout.preferredWidth: 1
     horizontalPadding: Style.space(4)
     verticalPadding: Style.space(7)
     bordered: true
     enabled: !view.recorder.locked
+  }
+
+  component Rate: Segment {
+    required property int rate
+    objectName: "rate-" + rate
+    enabled: !view.recorder.locked && view.models.some(item => item.rate === rate)
+    selected: view.chosen?.rate === rate
+    text: view.rateText(rate)
+    onClicked: view.selectRate(rate)
+  }
+
+  component Variant: Segment {
+    required property string label
+    readonly property var info: view.models.find(item => item.rate === view.chosen?.rate && item.label === label) || null
+    objectName: "variant-" + label
+    visible: info !== null
+    selected: info !== null && info.id === view.stateData.model
+    text: label
+    onClicked: view.selectModel(info)
+  }
+  component Strength: Segment {
+    required property int value
     selected: Number(view.stateData.strength || 12) === value
     text: view.words.t("strength." + value)
     onClicked: if (!selected) view.recorder.run(["set-strength", String(value)])

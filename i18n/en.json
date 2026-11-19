@@ -1,6 +1,6 @@
 {
   "title": "Voice Recorder",
-  "format": "DPDFNet · 48 kHz · mono",
+  "format": "Input · 48 kHz · mono",
   "tip.start": "Voice Recorder · Click to open, right-click to record",
   "tip.stop": "Recording · %1 · Right-click to stop and clean",
   "state.loading": "Getting ready…",
@@ -43,5 +43,21 @@
   "error.picker": "Could not open the folder chooser. Check that GTK and python-gobject are installed.",
   "strength.note.6": "Up to 6 dB. Keeps more of the natural room sound.",
   "strength.note.12": "Up to 12 dB. Reduces background noise while preserving vocal tone.",
-  "strength.note.24": "Up to 24 dB. Reduces more noise and may soften quieter speech sounds."
+  "strength.note.24": "Up to 24 dB. Reduces more noise and may soften quieter speech sounds.",
+  "model.title": "Cleanup model",
+  "model.rate": "%1 kHz",
+  "model.variant": "%1 · %2 · %3 dB",
+  "model.unknownStrength": "%1 · %2",
+  "model.missing": "Model not installed. Run scripts/install-engine in the plugin folder to download it.",
+  "model.note.dpdfnet2_48khz_hr": "Preserves the wider frequency range of the microphone. Faster of the two full-band models.",
+  "model.note.dpdfnet8_48khz_hr": "Preserves the wider frequency range of the microphone. Uses more CPU than DPDFNet-2.",
+  "model.note.baseline": "Speech bandwidth. The fastest of the 16 kHz models.",
+  "model.note.dpdfnet2": "Speech bandwidth. Runs faster than DPDFNet-4 and DPDFNet-8.",
+  "model.note.dpdfnet4": "Speech bandwidth. CPU cost sits between DPDFNet-2 and DPDFNet-8.",
+  "model.note.dpdfnet8": "Speech bandwidth. The most computationally demanding 16 kHz model.",
+  "model.note.dpdfnet2_8khz": "Telephone bandwidth. Faster of the two narrowband models.",
+  "model.note.dpdfnet8_8khz": "Telephone bandwidth. Uses more CPU than the 8 kHz DPDFNet-2.",
+  "take.processed": "Playback · %1",
+  "take.selected": "Current settings · %1",
+  "take.apply": "Apply to this recording"
 }
