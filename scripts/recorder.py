@@ -37,6 +37,8 @@ MODELS = {
     "dpdfnet8_8khz": ("DPDFNet-8", 8000),
 }
 STRENGTHS = (6, 12, 24)
+LANGUAGES = ("system", "ru", "en")
+DEVICES = ("auto", "cuda", "cpu")
 ACTIVE = {"starting", "recording", "processing"}
 TAKE_NAME = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_\d{6}")
 
@@ -95,10 +97,23 @@ def selected_folder(settings):
     return music / "DPDFNet"
 
 
-def empty_state(folder, model, strength):
+def preferences(settings):
+    model = settings.get("model")
+    strength = settings.get("strength")
+    language = settings.get("language")
+    device = settings.get("device")
+    return {
+        "model": model if isinstance(model, str) and model in MODELS else DEFAULT_MODEL,
+        "strength": strength if strength in STRENGTHS else 12,
+        "language": language if language in LANGUAGES else "system",
+        "device": device if device in DEVICES else "auto",
+    }
+
+
+def empty_state(folder, prefs):
     return dict(phase="idle", folder=str(folder), take="", original="", cleaned="",
-                startedAt=0, duration=0, error="", model=model, strength=strength,
-                models=list_models(), matched=False, cleanedModel="", cleanedStrength=0)
+                startedAt=0, duration=0, error="", models=list_models(), matched=False,
+                cleanedModel="", cleanedStrength=0, **prefs)
 
 
 def wav_duration(path):
@@ -164,8 +179,8 @@ def restore_take(state, take):
     return False
 
 
-def latest(folder, model, strength, review_take=None):
-    state = empty_state(folder, model, strength)
+def latest(folder, prefs, review_take=None):
+    state = empty_state(folder, prefs)
     try:
         if review_take:
             take = Path(review_take)
@@ -216,8 +231,11 @@ def engine(model):
 
 
 def update(state, **fields):
-    state.update(fields)
     with serialized():
+        # A capture can outlive several language and live-device changes.
+        # Preserve its selected model and strength, but publish current UI preferences.
+        prefs = preferences(read_json(CONFIG))
+        state.update(fields, language=prefs["language"], device=prefs["device"])
         write_json(STATE, state)
 
 
@@ -326,22 +344,25 @@ def command(action, argument):
     with serialized():
         saved = read_json(STATE)
         settings = read_json(CONFIG)
-        strength = settings.get("strength", 12)
-        if strength not in STRENGTHS:
-            strength = 12
-        model = settings.get("model", DEFAULT_MODEL)
-        if not isinstance(model, str) or model not in MODELS:
-            model = DEFAULT_MODEL
+        if action in {"set-language", "set-device"}:
+            field = action.removeprefix("set-")
+            if settings.get(field) != argument:
+                settings[field] = argument
+                write_json(CONFIG, settings)
+        prefs = preferences(settings)
+        model = prefs["model"]
         if saved:
-            state = dict(saved, strength=strength, model=model, models=list_models())
+            state = dict(saved, models=list_models(), **prefs)
             state.setdefault("matched", False)
             state.setdefault("cleanedModel", "")
             state.setdefault("cleanedStrength", 0)
         else:
-            state = latest(selected_folder(settings), model, strength, settings.get("reviewTake"))
+            state = latest(selected_folder(settings), prefs, settings.get("reviewTake"))
         if worker_busy():
             if action == "stop" and state["phase"] in {"starting", "recording"}:
                 STOP.touch()
+            if state != saved:
+                write_json(STATE, state)
             return state
 
         if state["phase"] in ACTIVE:
@@ -370,7 +391,7 @@ def command(action, argument):
                 if unfinished:
                     state["folder"] = str(folder)
                 else:
-                    state = latest(folder, model, strength)
+                    state = latest(folder, prefs)
             elif action in {"set-strength", "set-model"}:
                 field = "strength" if action == "set-strength" else "model"
                 if field == "model" and argument not in MODELS:
@@ -397,7 +418,7 @@ def command(action, argument):
                 target.mkdir(parents=not settings.get("folder"), mode=0o700)
                 if settings.pop("reviewTake", None):
                     write_json(CONFIG, settings)
-                state = empty_state(target.parent, model, strength)
+                state = empty_state(target.parent, prefs)
                 state["take"] = str(target)
                 launch(state, "capture")
                 return state
@@ -430,6 +451,8 @@ def main():
     actions.add_parser("set-folder").add_argument("argument", metavar="PATH")
     actions.add_parser("set-strength").add_argument("argument", type=int, choices=STRENGTHS)
     actions.add_parser("set-model").add_argument("argument", metavar="ID")
+    actions.add_parser("set-language").add_argument("argument", choices=LANGUAGES)
+    actions.add_parser("set-device").add_argument("argument", choices=DEVICES)
     args = parser.parse_args()
     print(json.dumps(command(args.action, getattr(args, "argument", None)), ensure_ascii=False))
 

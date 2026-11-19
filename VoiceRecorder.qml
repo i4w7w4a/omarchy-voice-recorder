@@ -20,6 +20,7 @@ Panel {
   readonly property bool capturing: phase === "recording"
   readonly property bool working: capturing || phase === "starting" || phase === "processing"
   readonly property bool locked: working || action.running || picker.running || phase === "loading"
+  readonly property bool canSetPreferences: !action.running && phase !== "loading"
   readonly property bool canRecord: !locked || (capturing && !action.running)
   readonly property bool canRetry: phase === "error" && !!snapshot.original && !snapshot.cleaned
   property var liveState: ({})
@@ -79,6 +80,8 @@ Panel {
   }
   function chooseFolder() {
     if (locked) return
+    const language = snapshot.language
+    picker.environment = language === "en" || language === "ru" ? { LANGUAGE: language } : {}
     picker.command = ["/usr/bin/python3", "-B", script("folder-picker.py"), snapshot.folder || "", strings.t("folder.choose")]
     // An external desktop dialog must receive pointer events above the layer surface.
     close()
@@ -122,7 +125,7 @@ Panel {
     }
   }
 
-  Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+  PluginTranslations { id: strings; preference: root.snapshot.language || "system" }
   Component.onCompleted: run(["status"])
 
   Process {

@@ -33,10 +33,11 @@ sys.exit(1)
 """
 
 FAKE_ENHANCE = """
-import os, pathlib, shutil, sys
+import os, pathlib, shutil, sys, time
 runtime = pathlib.Path(os.environ["XDG_RUNTIME_DIR"])
 (runtime / "strength").write_text(sys.argv[-1])
 (runtime / "model").write_text(sys.argv[sys.argv.index("--model") + 1])
+while (runtime / "delay-engine").exists(): time.sleep(.02)
 if (runtime / "fail-engine").exists():
     pathlib.Path(sys.argv[3]).write_bytes(b"incomplete WAV")
     sys.exit(1)
@@ -106,6 +107,36 @@ class RecorderTests(unittest.TestCase):
         # Runtime state is ephemeral. Saved settings and recordings survive login.
         shutil.rmtree(self.runtime / "omarchy-voice-recorder")
         self.assertEqual(self.call("status"), ready)
+
+    def test_language_and_live_device_persist_through_worker_updates(self):
+        state_file = self.runtime / "omarchy-voice-recorder/state.json"
+        before = self.call("status")
+        self.assertEqual((before["language"], before["device"]), ("system", "auto"))
+        self.call("start")
+        self.wait_for("recording")
+        self.call("set-language", "ru")
+        self.assertEqual(json.loads(state_file.read_text())["language"], "ru")
+        delay = self.runtime / "delay-engine"
+        delay.touch()
+        try:
+            self.call("stop")
+            self.assertEqual(self.wait_for("processing")["language"], "ru")
+            with ThreadPoolExecutor(2) as pool:
+                list(pool.map(lambda args: self.call(*args), [("set-language", "en"), ("set-device", "cuda")]))
+        finally:
+            delay.unlink(missing_ok=True)
+        # Read the worker's published state before any new command could repair it.
+        until = time.monotonic() + 5
+        while time.monotonic() < until:
+            saved = json.loads(state_file.read_text())
+            if saved["phase"] == "ready":
+                break
+            time.sleep(.04)
+        self.assertEqual((saved["phase"], saved["language"], saved["device"]), ("ready", "en", "cuda"))
+        # GPU selection only affects live audio, not the saved-file CPU engine.
+        self.assertTrue(Path(saved["cleaned"]).is_file())
+        shutil.rmtree(state_file.parent)
+        self.assertEqual(self.call("status"), saved)
 
     def test_retry_after_engine_error_and_folder_change(self):
         (self.runtime / "fail-engine").touch()

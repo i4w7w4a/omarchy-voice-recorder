@@ -18,13 +18,18 @@ root = pathlib.Path(os.environ['XDG_RUNTIME_DIR'])
 parser = argparse.ArgumentParser()
 parser.add_argument('--model')
 parser.add_argument('--strength')
+parser.add_argument('--device', choices=('cpu', 'auto', 'cuda'), required=True)
 args = parser.parse_args()
 (root / 'audio-pid').write_text(str(os.getpid()))
 (root / 'supervisor-pid').write_text(str(os.getppid()))
 with (root / 'starts').open('a') as f: print(args.model, args.strength, file=f)
 while (root / 'delay').exists(): time.sleep(.02)
-if (root / 'fallback').exists(): print('READY baseline', flush=True)
-else: print('READY', flush=True)
+if args.device != 'cpu' and (root / 'broken-gpu').exists():
+    print('ERROR gpu', flush=True)
+    sys.exit(1)
+model = 'baseline' if (root / 'fallback').exists() else args.model
+device = 'cpu' if args.device == 'cpu' else 'cuda'
+print('READY', model, device, flush=True)
 while not (root / 'overload').exists(): time.sleep(.02)
 print('ERROR overload', flush=True)
 """
@@ -59,8 +64,14 @@ class LiveTests(unittest.TestCase):
                         XDG_CONFIG_HOME=str(config), XDG_DATA_HOME=str(data), DPDFNET_MODEL_DIR=str(self.models))
         self.addCleanup(self.shutdown)
 
-    def save_settings(self, model, strength):
-        self.prefs.write_text(json.dumps(dict(model=model, strength=strength)))
+    def save_settings(self, model, strength, device="auto"):
+        self.prefs.write_text(json.dumps(dict(model=model, strength=strength, device=device)))
+
+    def install_gpu(self):
+        env = self.root / "data/dpdfnet/gpu-venv"
+        (env / "bin").mkdir(parents=True)
+        (env / "bin/python").symlink_to(sys.executable)
+        (env / ".cuda-ready").touch()
 
     def call(self, verb):
         return json.loads(subprocess.check_output([sys.executable, self.cli, verb], env=self.env, timeout=4))
@@ -106,11 +117,51 @@ class LiveTests(unittest.TestCase):
         self.call("start")
         active = self.await_phase("on")
         self.assertEqual((active["model"], active["requestedModel"]), ("baseline", "dpdfnet8_48khz_hr"))
+        self.assertEqual((active["requestedDevice"], active["device"]), ("auto", "cpu"))
         (self.runtime / "overload").touch()
         self.assertEqual(self.await_phase("error")["error"], "overload")
         (self.runtime / "overload").unlink()
         self.call("start")
         self.await_phase("on")
+
+    def test_gpu_unavailable_and_ready_marker(self):
+        self.save_settings("baseline", 12, "cuda")
+        self.assertEqual(self.call("start")["error"], "gpu")
+        self.assertFalse((self.runtime / "starts").exists())
+        self.install_gpu()
+        marker = self.root / "data/dpdfnet/gpu-venv/.cuda-ready"
+        marker.unlink()
+        self.assertEqual(self.call("start")["error"], "gpu")
+        marker.touch()
+        self.call("start")
+        active = self.await_phase("on")
+        self.assertEqual((active["requestedDevice"], active["device"]), ("cuda", "cuda"))
+        self.shutdown()
+        self.save_settings("baseline", 6, "cpu")
+        self.call("start")
+        active = self.await_phase("on")
+        self.assertEqual((active["requestedDevice"], active["device"]), ("cpu", "cpu"))
+
+    def test_auto_retries_broken_gpu_but_explicit_selection_fails(self):
+        self.install_gpu()
+        (self.runtime / "broken-gpu").touch()
+        self.call("start")
+        active = self.await_phase("on")
+        self.assertEqual((active["requestedDevice"], active["device"]), ("auto", "cpu"))
+        self.assertEqual(len((self.runtime / "starts").read_text().splitlines()), 2)
+        self.shutdown()
+        self.save_settings("baseline", 12, "cuda")
+        self.call("start")
+        self.assertEqual(self.await_phase("error")["error"], "gpu")
+        self.assertEqual(len((self.runtime / "starts").read_text().splitlines()), 3)
+
+    def test_explicit_cuda_refuses_substituted_model(self):
+        self.install_gpu()
+        (self.models / "dpdfnet8_48khz_hr.onnx").write_bytes(b"fixture")
+        self.save_settings("dpdfnet8_48khz_hr", 12, "cuda")
+        (self.runtime / "fallback").touch()
+        self.call("start")
+        self.assertEqual(self.await_phase("error")["error"], "overload")
 
     def test_dead_supervisor_stops_worker_and_releases_lease(self):
         self.call("start")

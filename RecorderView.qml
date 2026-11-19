@@ -22,7 +22,8 @@ PanelKeyCatcher {
   readonly property string requestedLiveModel: recorder.liveState.requestedModel || recorder.liveState.model || ""
   readonly property bool liveFallback: recorder.livePhase === "on" && !!liveModel && requestedLiveModel !== liveModel.id
   readonly property bool liveChanged: recorder.liveActive && !!chosen && !!liveModel
-    && (chosen.id !== requestedLiveModel || stateData.strength !== recorder.liveState.strength)
+    && (chosen.id !== requestedLiveModel || stateData.strength !== recorder.liveState.strength
+        || (stateData.device || "auto") !== (recorder.liveState.requestedDevice || "auto"))
   readonly property bool canApply: !!stateData.original && !!stateData.cleaned && stateData.matched === false
   function rateText(rate) { return words.t("model.rate").arg(rate / 1000) }
   function variantText(model, strength) {
@@ -61,7 +62,8 @@ PanelKeyCatcher {
   }
   function move(step) {
     const available = (settings
-      ? [settingsButton, fullRate, wideRate, phoneRate, baseModelButton, net2, net4, net8, mild, normal, strong, folderButton]
+      ? [settingsButton, systemLanguage, russian, english, fullRate, wideRate, phoneRate,
+         baseModelButton, net2, net4, net8, mild, normal, strong, autoDevice, nvidia, cpu, folderButton]
       : [mainButton, dry, wet, applyButton, retryButton, filesButton, liveButton, settingsButton])
       .filter(item => item.visible && item.enabled)
     if (!available.length) return
@@ -350,7 +352,13 @@ PanelKeyCatcher {
               width: parent.width
               visible: view.recorder.liveActive && !!view.liveModel
               wrapMode: Text.WordWrap
-              text: view.variantText(view.liveModel, view.recorder.liveState.strength)
+              text: {
+                const variant = view.variantText(view.liveModel, view.recorder.liveState.strength)
+                const device = view.recorder.liveState.device
+                return view.recorder.livePhase === "on" && (device === "cuda" || device === "cpu")
+                  ? view.words.t("live.variantDevice").arg(variant).arg(view.words.t("device." + device))
+                  : variant
+              }
               color: view.muted
               font.pixelSize: Style.font.bodySmall
             }
@@ -381,7 +389,9 @@ PanelKeyCatcher {
               width: parent.width
               visible: view.recorder.liveProblem !== ""
               wrapMode: Text.WordWrap
-              text: view.words.t("live.error." + view.recorder.liveProblem, view.words.t("live.error.backend"))
+              text: view.recorder.liveProblem === "overload" && view.recorder.liveState.requestedDevice === "cuda"
+                ? view.words.t("live.error.cudaOverload")
+                : view.words.t("live.error." + view.recorder.liveProblem, view.words.t("live.error.backend"))
               color: Commons.Color.urgent
               font.pixelSize: Style.font.bodySmall
             }
@@ -392,6 +402,18 @@ PanelKeyCatcher {
           visible: view.settings
           width: parent.width
           spacing: Style.space(12)
+          Column {
+            width: parent.width
+            spacing: Style.space(5)
+            Label { text: view.words.t("language.title"); font.bold: true }
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(4)
+              Language { id: systemLanguage; choice: "system" }
+              Language { id: russian; choice: "ru" }
+              Language { id: english; choice: "en" }
+            }
+          }
           Column {
             width: parent.width
             spacing: Style.space(6)
@@ -449,6 +471,25 @@ PanelKeyCatcher {
           }
           Column {
             width: parent.width
+            spacing: Style.space(6)
+            Label { text: view.words.t("device.title"); font.bold: true }
+            RowLayout {
+              width: parent.width
+              spacing: Style.space(4)
+              Device { id: autoDevice; choice: "auto" }
+              Device { id: nvidia; choice: "cuda" }
+              Device { id: cpu; choice: "cpu" }
+            }
+            Label {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              color: view.muted
+              font.pixelSize: Style.font.bodySmall
+              text: view.words.t("device.note." + (view.stateData.device || "auto"))
+            }
+          }
+          Column {
+            width: parent.width
             spacing: Style.space(4)
             Label { text: view.words.t("folder.title"); font.bold: true }
             Label { width: parent.width; text: view.pathLabel; elide: Text.ElideMiddle; color: view.muted }
@@ -488,6 +529,24 @@ PanelKeyCatcher {
     verticalPadding: Style.space(7)
     bordered: true
     enabled: !view.recorder.locked
+  }
+
+  component Language: Segment {
+    required property string choice
+    objectName: "language-" + choice
+    enabled: view.recorder.canSetPreferences
+    selected: (view.stateData.language || "system") === choice
+    text: view.words.t("language." + choice)
+    onClicked: if (!selected) view.recorder.run(["set-language", choice])
+  }
+
+  component Device: Segment {
+    required property string choice
+    objectName: "device-" + choice
+    enabled: view.recorder.canSetPreferences
+    selected: (view.stateData.device || "auto") === choice
+    text: view.words.t("device." + choice)
+    onClicked: if (!selected) view.recorder.run(["set-device", choice])
   }
 
   component Rate: Segment {

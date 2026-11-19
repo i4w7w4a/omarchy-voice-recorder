@@ -3,8 +3,9 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import live_audio
@@ -20,6 +21,29 @@ class LiveAudioTests(unittest.TestCase):
         self.assertEqual(live_audio.candidates("baseline"), ["baseline"])
         self.assertEqual(live_audio.candidates("dpdfnet8_48khz_hr"),
                          ["dpdfnet8_48khz_hr", "dpdfnet2_48khz_hr"])
+
+    def test_requested_device_and_model_are_respected(self):
+        preferred = "dpdfnet8_48khz_hr"
+        cpu = MagicMock()
+        gpu = MagicMock()
+        with tempfile.TemporaryDirectory() as work:
+            folder = Path(work)
+            (folder / (preferred + ".onnx")).touch()
+            with (patch.dict(sys.modules, {"numpy": MagicMock(), "dpdfnet": MagicMock(StreamEnhancer=cpu)}),
+                  patch.object(live_audio, "model_dir", return_value=folder),
+                  patch.object(live_audio, "CudaStream", gpu),
+                  patch.object(live_audio, "meets_deadline", return_value=True) as speed):
+                self.assertEqual(live_audio.select_engine(preferred, "auto")[:2], (preferred, "cuda"))
+                gpu.side_effect = RuntimeError("no driver")
+                with self.assertRaisesRegex(live_audio.LiveError, "gpu"):
+                    live_audio.select_engine(preferred, "cuda")
+                cpu.assert_not_called()
+                self.assertEqual(live_audio.select_engine(preferred, "auto")[:2], (preferred, "cpu"))
+                gpu.side_effect = None
+                speed.return_value = False
+                with self.assertRaisesRegex(live_audio.LiveError, "overload"):
+                    live_audio.select_engine(preferred, "cuda")
+                self.assertEqual(cpu.call_count, 1)
 
     def test_pinned_input_is_a_source_and_never_our_own_output(self):
         def node(name, media_class, serial):

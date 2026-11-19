@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from gpu_stream import CudaStream, CudaUnavailable, prepare_libraries
 from recorder import MODELS, STRENGTHS, model_dir, subprocess_guard
 
 SOURCE_NAME = "dpdfnet_clean_microphone"
@@ -55,33 +56,50 @@ def candidates(model):
     return [model] + [name for name in fallback if name != model]
 
 
-def select_engine(preferred):
+def meets_deadline(enhancer, noise):
+    for _ in range(10):
+        enhancer.process(noise)
+    times = []
+    for _ in range(3):
+        start = time.monotonic()
+        for _ in range(20):
+            enhancer.process(noise)
+        times.append((time.monotonic() - start) / 20)
+    enhancer.reset()
+    return statistics.median(times) <= HOP_SECONDS * 0.92
+
+
+def select_engine(preferred, device):
     import numpy as np
     from dpdfnet import StreamEnhancer
 
     rate = MODELS[preferred][1]
     noise = np.random.default_rng(5).normal(0, 0.06, rate // 100).astype("float32")
+    selected_weights = model_dir() / (preferred + ".onnx")
+    if not selected_weights.is_file():
+        raise LiveError("model")
+    if device != "cpu":
+        try:
+            gpu = CudaStream(preferred, selected_weights)
+            if meets_deadline(gpu, noise):
+                return preferred, "cuda", gpu
+        except Exception as exc:
+            # ORT exposes driver, cuDNN and provider failures as different Python
+            # exception classes. The auto mode may still use the CPU engine.
+            if device == "cuda":
+                raise LiveError("gpu") from exc
+        if device == "cuda":
+            raise LiveError("overload")
     for model in candidates(preferred):
         path = model_dir() / (model + ".onnx")
         if not path.is_file():
-            if model == preferred:
-                raise LiveError("model")
             continue
         try:
             enhancer = StreamEnhancer(model=model, onnx_path=path)
         except (OSError, RuntimeError, ValueError) as exc:
             raise LiveError("model") from exc
-        for _ in range(10):
-            enhancer.process(noise)
-        times = []
-        for _ in range(3):
-            start = time.monotonic()
-            for _ in range(20):
-                enhancer.process(noise)
-            times.append((time.monotonic() - start) / 20)
-        if statistics.median(times) <= HOP_SECONDS * 0.92:
-            enhancer.reset()
-            return model, enhancer
+        if meets_deadline(enhancer, noise):
+            return model, "cpu", enhancer
     raise LiveError("overload")
 
 
@@ -130,11 +148,11 @@ def write_pcm(fd, pcm):
         raise LiveError("stream")
 
 
-def stream(serial, preferred, strength):
+def stream(serial, preferred, strength, device):
     import numpy as np
     from dpdfnet.audio import ATTN_LIMIT_NOISY_FRAME_OFFSET
 
-    model, enhancer = select_engine(preferred)
+    model, actual_device, enhancer = select_engine(preferred, device)
     rate = MODELS[model][1]
     hop = rate // 100
     zero = np.zeros(hop, dtype="float32")
@@ -179,7 +197,7 @@ def stream(serial, preferred, strength):
                 sources = subprocess.check_output(["pactl", "list", "short", "sources"],
                                                   text=True, timeout=2)
                 if any(line.split("\t")[1:2] == [SOURCE_NAME] for line in sources.splitlines()):
-                    print("READY", model, flush=True)
+                    print("READY", model, actual_device, flush=True)
                     ready = True
             if count == 100:
                 if compute_time > HOP_SECONDS * count * 1.05:
@@ -192,7 +210,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=MODELS, required=True)
     parser.add_argument("--strength", type=int, choices=STRENGTHS, required=True)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     args = parser.parse_args()
+    if args.device != "cpu":
+        prepare_libraries()
 
     def stop(_sig, _frame):
         raise SystemExit(0)
@@ -200,9 +221,11 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
-        stream(source_serial(), args.model, args.strength)
+        stream(source_serial(), args.model, args.strength, args.device)
     except LiveError as exc:
         reason = str(exc)
+    except CudaUnavailable:
+        reason = "gpu"
     except ImportError:
         reason = "engine"
     except (subprocess.SubprocessError, FileNotFoundError):

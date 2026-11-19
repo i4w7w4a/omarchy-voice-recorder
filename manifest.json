@@ -1,10 +1,11 @@
 {
   "schemaVersion": 1,
   "id": "re_pick.voice-recorder",
-  "name": "Voice Recorder",
-  "version": "0.3.0",
+  "name": "Omarchy Voice Recorder",
+  "version": "0.4.0",
   "author": "i4w7w4a",
-  "description": "Record and compare denoised speech, or send a local clean microphone to calls and streaming apps.",
+  "description": "Record and compare denoised speech, or send a local CPU- or NVIDIA-accelerated microphone to calls and streams.",
+  "license": "MIT",
   "kinds": ["bar-widget"],
   "entryPoints": {"barWidget": "VoiceRecorder.qml"},
   "barWidget": {
@@ -12,6 +13,6 @@
     "category": "Audio",
     "aliases": ["voice recorder", "microphone", "dpdfnet", "диктофон"],
     "allowMultiple": false,
-    "defaultSection": "centerEnd"
+    "defaultSection": "center"
   }
 }

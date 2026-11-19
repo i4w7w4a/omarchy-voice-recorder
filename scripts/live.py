@@ -19,10 +19,12 @@ STATE = recorder.RUNTIME / "live.json"
 LEASE = recorder.RUNTIME / "live-worker.lock"
 STOP = recorder.RUNTIME / "live-stop"
 AUDIO = Path(__file__).with_name("live_audio.py")
-ERRORS = {"source", "pipewire", "engine", "model", "overload", "stream"}
+ERRORS = {"source", "pipewire", "engine", "model", "overload", "stream", "gpu"}
 PLUGIN_ID = "re_pick.voice-recorder"
 OMARCHY = recorder.CONFIG.parents[1] / "omarchy"
 INSTALLED = OMARCHY / "plugins" / PLUGIN_ID
+GPU_VENV = Path(os.environ.get("XDG_DATA_HOME", recorder.HOME / ".local/share")) / "dpdfnet/gpu-venv"
+GPU_PYTHON = GPU_VENV / "bin/python"
 
 
 @contextmanager
@@ -33,15 +35,19 @@ def serialized():
 
 
 def preferences():
-    settings = recorder.read_json(recorder.CONFIG)
-    model = settings.get("model")
-    strength = settings.get("strength")
-    if not isinstance(model, str) or model not in recorder.MODELS:
-        model = recorder.DEFAULT_MODEL
-    return dict(model=model, requestedModel=model, strength=strength if strength in recorder.STRENGTHS else 12)
+    prefs = recorder.preferences(recorder.read_json(recorder.CONFIG))
+    return dict(model=prefs["model"], requestedModel=prefs["model"], strength=prefs["strength"],
+                device="", requestedDevice=prefs["device"])
 
 
-def interpreter(model):
+def interpreter(model, device):
+    if device != "cpu":
+        if (GPU_VENV / ".cuda-ready").is_file() and os.access(GPU_PYTHON, os.X_OK):
+            if not recorder.weights_installed(recorder.model_dir(), model):
+                raise recorder.RecorderError("model")
+            return GPU_PYTHON
+        if device == "cuda":
+            raise recorder.RecorderError("gpu")
     binary = Path(recorder.engine(model)).resolve()
     python = binary.with_name("python")
     if not os.access(python, os.X_OK):
@@ -50,7 +56,7 @@ def interpreter(model):
 
 
 def start(lease, state):
-    python = interpreter(state["model"])
+    python = interpreter(state["model"], state["requestedDevice"])
     STOP.unlink(missing_ok=True)
     state.update(phase="starting", error="")
     # The open file description and its lock pass directly to the supervisor.
@@ -72,6 +78,9 @@ def command(action):
 
         if busy:
             state = dict(saved)
+            # An instance already streaming across the 0.3 upgrade runs on CPU.
+            state.setdefault("requestedDevice", "cpu")
+            state.setdefault("device", "cpu" if state.get("phase") == "on" else "")
             if action == "stop":
                 STOP.touch()
                 state.update(phase="stopping", error="")
@@ -135,7 +144,9 @@ def supervise(python, state):
     watch_layout = installation is not None and widget_enabled() is True
     next_check = time.monotonic() + 2
     env = dict(os.environ, DPDFNET_HF_BASE_URL="file:///dev/null", DPDFNET_DOWNLOAD_RETRIES="1")
-    args = [python, "-u", "-B", AUDIO, "--model", state["model"], "--strength", str(state["strength"])]
+    device = state["requestedDevice"] if Path(python) == GPU_PYTHON else "cpu"
+    args = [python, "-u", "-B", AUDIO, "--model", state["model"], "--strength", str(state["strength"]),
+            "--device", device]
     with subprocess.Popen(args, stdout=subprocess.PIPE, env=env, start_new_session=True,
                           preexec_fn=recorder.subprocess_guard(signal.SIGTERM)) as audio:
         try:
@@ -164,15 +175,20 @@ def supervise(python, state):
                     pending += chunk
                     while b"\n" in pending:
                         line, pending = pending.split(b"\n", 1)
-                        if line == b"READY" or line.startswith(b"READY "):
-                            model = (line[6:].decode("ascii", errors="replace")
-                                     if line.startswith(b"READY ") else state["requestedModel"])
-                            if model not in recorder.MODELS:
+                        if line.startswith(b"READY"):
+                            fields = line.decode("ascii", errors="replace").split()
+                            if (len(fields) != 3 or fields[0] != "READY" or fields[1] not in recorder.MODELS
+                                    or fields[2] not in {"cpu", "cuda"}):
                                 return "stream"
+                            _, model, actual_device = fields
+                            if device != "auto" and actual_device != device:
+                                return "gpu"
+                            if device == "cuda" and model != state["requestedModel"]:
+                                return "overload"
                             with serialized():
                                 if STOP.exists():
                                     return ""
-                                state.update(phase="on", model=model, error="")
+                                state.update(phase="on", model=model, device=actual_device, error="")
                                 recorder.write_json(STATE, state)
                         elif line.startswith(b"ERROR "):
                             code = line[6:].decode("ascii", errors="replace")
@@ -188,14 +204,31 @@ def worker(lease_fd, python):
     error = ""
     try:
         if not STOP.exists():
-            error = supervise(python, state)
+            try:
+                error = supervise(python, state)
+            except OSError:
+                error = "engine"
+            # The GPU environment can be invalidated by a driver update after installation.
+            # Retry startup once in the independent CPU environment for automatic selection.
+            if (state["phase"] == "starting" and state["requestedDevice"] == "auto"
+                    and Path(python) == GPU_PYTHON and error in {"gpu", "engine", "stream"}
+                    and not STOP.exists()):
+                cpu = interpreter(state["requestedModel"], "cpu")
+                error = supervise(cpu, state)
+            if (state["phase"] == "starting" and state["requestedDevice"] == "cuda"
+                    and error in {"engine", "stream"}):
+                error = "gpu"
+    except recorder.RecorderError as exc:
+        error = str(exc)
     except OSError:
-        error = "stream"
+        error = "engine"
     finally:
         with serialized():
             if STOP.exists():
                 error = ""
-            state.update(phase="error" if error else "off", error=error)
+            if not error:
+                state.update(preferences())
+            state.update(phase="error" if error else "off", device="", error=error)
             os.close(lease_fd)
             recorder.write_json(STATE, state)
 
