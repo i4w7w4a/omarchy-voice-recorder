@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "re_pick.voice-recorder",
+  "name": "Voice Recorder",
+  "version": "0.1.0",
+  "author": "i4w7w4a",
+  "description": "Record your microphone, clean up speech locally with DPDFNet and compare both takes from the bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "VoiceRecorder.qml"},
+  "barWidget": {
+    "displayName": "Voice Recorder",
+    "category": "Audio",
+    "aliases": ["voice recorder", "microphone", "dpdfnet", "диктофон"],
+    "allowMultiple": false,
+    "defaultSection": "centerEnd"
+  }
+}

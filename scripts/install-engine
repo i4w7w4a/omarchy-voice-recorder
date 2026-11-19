@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Install the optional per-user CPU engine and its 48 kHz model.
+set -euo pipefail
+
+if ! command -v uv >/dev/null; then
+  echo "Install uv first (on Omarchy: omarchy pkg add uv)." >&2
+  exit 1
+fi
+
+engine_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dpdfnet/venv"
+model=dpdfnet2_48khz_hr
+if [[ ! -f "$engine_dir/pyvenv.cfg" ]]; then
+  if [[ -e "$engine_dir" ]]; then
+    echo "The engine directory already exists and is not a virtual environment: $engine_dir" >&2
+    exit 1
+  fi
+  uv venv --python 3.13 "$engine_dir"
+fi
+uv pip install --python "$engine_dir/bin/python" 'dpdfnet==0.6.0'
+"$engine_dir/bin/dpdfnet" download "$model"
+printf 'Engine ready: %s\n' "$engine_dir/bin/dpdfnet"
